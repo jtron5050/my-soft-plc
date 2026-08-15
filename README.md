@@ -19,6 +19,7 @@ Rust monorepo (`crates/*`). Current crates:
 | [`plc-io`](crates/plc-io) | Process image, quality, IoDriver trait, double-buffer, force priority |
 | [`plc-io-sim`](crates/plc-io-sim) | Simulation I/O driver |
 | [`plc-ir`](crates/plc-ir) | IR v0.1 types, `spbc` framing, verifier, `spasm` assembler |
+| [`plc-fb-primitives`](crates/plc-fb-primitives) | Native FBs: TON/TOF/TP, CTU/CTD, RS/SR, edges, PID |
 
 Further crates (`plc-scan`, `plc-vm`, …) land in later PRs per the architecture plan.
 
@@ -39,4 +40,4 @@ CI runs the same checks on every push and pull request.
 
 ## Status
 
-PR-01–PR-04 are in place (workspace, config, I/O, IR). Next: FB primitives + VM (PR-05/06) per the architecture plan.
+PR-01–PR-05 are in place (workspace through native FB primitives). Next: IR VM (PR-06) per the architecture plan.

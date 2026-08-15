@@ -1,0 +1,16 @@
+[package]
+name = "plc-fb-primitives"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Native function-block primitives (TON/TOF/TP, counters, latches, edges, PID)"
+readme.workspace = true
+
+[dependencies]
+plc-ir = { workspace = true }
+
+[lints]
+workspace = true

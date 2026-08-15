@@ -274,7 +274,8 @@ impl PrimitiveId {
     pub const fn input_count(self) -> u8 {
         match self {
             Self::Ton | Self::Tof | Self::Tp => 2, // IN, PT
-            Self::Ctu | Self::Ctd => 2,            // CU/CD, PV (simplified)
+            Self::Ctu => 3,                        // CU, R, PV
+            Self::Ctd => 3,                        // CD, LD, PV
             Self::Rs | Self::Sr => 2,              // S, R
             Self::RTrig | Self::FTrig => 1,        // CLK
             Self::Pid => 3,                        // PV, SP, enable (simplified)

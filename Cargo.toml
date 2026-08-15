@@ -6,6 +6,7 @@ members = [
     "crates/plc-io",
     "crates/plc-io-sim",
     "crates/plc-ir",
+    "crates/plc-fb-primitives",
 ]
 # Future RT crates (plc-scan, plc-vm, …) must not depend on tokio / network /
 # std filesystem on the scan path. See deny.toml [bans] notes and
@@ -27,6 +28,7 @@ plc-config = { path = "crates/plc-config", version = "0.1.0" }
 plc-io = { path = "crates/plc-io", version = "0.1.0" }
 plc-io-sim = { path = "crates/plc-io-sim", version = "0.1.0" }
 plc-ir = { path = "crates/plc-ir", version = "0.1.0" }
+plc-fb-primitives = { path = "crates/plc-fb-primitives", version = "0.1.0" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"

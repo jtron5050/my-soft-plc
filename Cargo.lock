@@ -48,6 +48,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "plc-fb-primitives"
+version = "0.1.0"
+dependencies = [
+ "plc-ir",
+]
+
+[[package]]
 name = "plc-io"
 version = "0.1.0"
 dependencies = [

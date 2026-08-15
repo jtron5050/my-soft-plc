@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-RT_CRATES=(plc-scan plc-vm plc-fb-primitives plc-types)
+RT_CRATES=(plc-scan plc-vm plc-fb-primitives plc-types plc-ir)
 FORBIDDEN=(tokio tokio-util hyper hyper-util reqwest axum warp actix-web mio socket2 rustls native-tls openssl rumqttc paho-mqtt)
 
 fail=0
