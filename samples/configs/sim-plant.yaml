@@ -1,0 +1,62 @@
+# Soft PLC device configuration — SIM plant pilot (schema v1)
+version: 1
+profile: dev
+
+device:
+  id: softplc-sim-01
+  name: Sim materials line
+  site: lab
+
+scan:
+  overrun_limit: 2
+  tasks:
+    - name: fast
+      period_ms: 20
+      entry: task.fast
+      priority: 100
+    - name: main
+      period_ms: 50
+      entry: task.main
+      priority: 50
+    - name: slow
+      period_ms: 500
+      entry: task.slow
+      priority: 10
+
+telemetry:
+  enabled: true
+  group_id: plantA
+  device_id: sim-line
+  broker_url: "mqtt://127.0.0.1:1883"
+  analog_period_ms: 500
+  digital_cos_ms: 20
+
+paths:
+  programs: "/var/lib/soft-plc/programs"
+  retain: "/var/lib/soft-plc/retain"
+  audit: "/var/lib/soft-plc/audit"
+  io_map: "samples/configs/sim-plant-io-map.yaml"
+
+limits:
+  max_package_bytes: 8388608
+  rest_rate_per_s: 30
+  rest_burst: 60
+  auth_fail_per_min: 5
+  max_instances: 4096
+
+program:
+  require_signature: false
+
+auth:
+  required: false
+
+io:
+  fault_on_module_bad: false
+  drivers:
+    - sim
+
+watchdog:
+  hardware_enabled: false
+  hardware_path: "/dev/watchdog"
+
+stop_output_policy: safe

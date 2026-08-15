@@ -1,0 +1,47 @@
+# cargo-deny configuration (KD-18 license posture; RT dependency bans).
+# Run with: cargo deny check
+# Install: cargo install cargo-deny
+
+[graph]
+all-features = true
+no-default-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+# Unmaintained crates: warn until we tighten in production hardening (PR-20).
+unmaintained = "workspace"
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "CC0-1.0",
+]
+
+[bans]
+# Workspace-wide: no multiple versions of the same crate unless needed.
+multiple-versions = "warn"
+wildcards = "deny"
+# RT path crates (plc-scan, plc-vm, and later plc-fb-primitives RT glue) must not
+# pull tokio, network, or filesystem crates. Enforce when those crates exist:
+#
+#   [[bans.deny]]
+#   name = "tokio"
+#   wrappers = ["plc-api", "plc-telemetry", "plc-runtime", "plc-io-modbus", "plc-retain"]
+#
+# Prefer crate-level `forbid` / empty dependency lists in RT crates; see
+# crates/plc-types/src/rt_path.rs and workspace lints.
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

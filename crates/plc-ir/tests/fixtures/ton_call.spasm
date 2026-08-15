@@ -1,0 +1,12 @@
+; Appendix A.9 — TON primitive call (task entry ends in HALT)
+; Push IN, PT; CALL_FB primitive TON instance @0x40; store Q, ET
+.header data_size=128 retain_size=0 input_slots=0 output_slots=0
+.entry task.main
+
+PUSHI_BOOL 1
+PUSH_TIME  1000
+CALL_FB    prim=TON instance=0x40
+; stack: Q, ET
+ST_DATA    0      ; q_slot
+ST_DATA    4      ; et_slot
+HALT

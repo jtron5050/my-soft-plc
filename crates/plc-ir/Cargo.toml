@@ -1,0 +1,19 @@
+[package]
+name = "plc-ir"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "IR v0.1 types, spbc framing, verifier, and spasm text assembler"
+readme.workspace = true
+
+[dependencies]
+plc-types = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

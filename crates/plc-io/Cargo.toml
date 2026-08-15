@@ -1,0 +1,20 @@
+[package]
+name = "plc-io"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Process image, quality plane, IoDriver trait, and double-buffer handoff"
+readme.workspace = true
+
+[dependencies]
+plc-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

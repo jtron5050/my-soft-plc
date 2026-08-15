@@ -1,0 +1,65 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/plc-types",
+    "crates/plc-config",
+    "crates/plc-io",
+    "crates/plc-io-sim",
+    "crates/plc-ir",
+]
+# Future RT crates (plc-scan, plc-vm, …) must not depend on tokio / network /
+# std filesystem on the scan path. See deny.toml [bans] notes and
+# crates/plc-types/src/rt_path.rs.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/example/my-soft-plc"
+authors = ["Soft PLC contributors"]
+description = "Soft PLC runtime for heavy materials / bulk materials handling plants"
+readme = "README.md"
+
+[workspace.dependencies]
+plc-types = { path = "crates/plc-types", version = "0.1.0" }
+plc-config = { path = "crates/plc-config", version = "0.1.0" }
+plc-io = { path = "crates/plc-io", version = "0.1.0" }
+plc-io-sim = { path = "crates/plc-io-sim", version = "0.1.0" }
+plc-ir = { path = "crates/plc-ir", version = "0.1.0" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+thiserror = "2.0"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# Keep the bar useful without drowning greenfield work.
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+# Common in assemblers / binary codecs; intentional truncations use try_from at boundaries.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+too_many_lines = "allow"
+match_same_arms = "allow"
+needless_raw_string_hashes = "allow"
+similar_names = "allow"
+struct_excessive_bools = "allow"
+wildcard_imports = "allow"
+uninlined_format_args = "allow"
+no_effect_underscore_binding = "allow"
+items_after_statements = "allow"
+if_not_else = "allow"
+single_match_else = "allow"
+redundant_closure_for_method_calls = "allow"
+cast_precision_loss = "allow"
+derivable_impls = "allow"

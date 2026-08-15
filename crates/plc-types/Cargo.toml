@@ -1,0 +1,16 @@
+[package]
+name = "plc-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Shared types, errors, and mode enums for the soft PLC runtime"
+readme.workspace = true
+
+[dependencies]
+# No third-party deps in PR-01 — keep the foundation lean and RT-safe.
+
+[lints]
+workspace = true
