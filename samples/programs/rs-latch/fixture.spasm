@@ -1,0 +1,14 @@
+; Appendix A.8 — RS latch user FB body (ends in RET)
+; Q := (S OR Q) AND NOT R
+; instance offsets: S@0, R@1, Q@2 (BOOL) in data base
+.header data_size=16 retain_size=0 input_slots=0 output_slots=0
+.entry fb.RS fb
+
+LD_DATA  0      ; S
+LD_DATA  2      ; Q
+OR
+LD_DATA  1      ; R
+NOT
+AND
+ST_DATA  2      ; Q
+RET

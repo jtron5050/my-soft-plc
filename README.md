@@ -20,8 +20,11 @@ Rust monorepo (`crates/*`). Current crates:
 | [`plc-io-sim`](crates/plc-io-sim) | Simulation I/O driver |
 | [`plc-ir`](crates/plc-ir) | IR v0.1 types, `spbc` framing, verifier, `spasm` assembler |
 | [`plc-fb-primitives`](crates/plc-fb-primitives) | Native FBs: TON/TOF/TP, CTU/CTD, RS/SR, edges, PID |
+| [`plc-vm`](crates/plc-vm) | IR v0.1 interpreter (no alloc in run loop) |
 
-Further crates (`plc-scan`, `plc-vm`, …) land in later PRs per the architecture plan.
+Further crates (`plc-scan`, …) land in later PRs per the architecture plan.
+
+Sample programs (text-reviewable `fixture.spasm`): under [`samples/programs/`](samples/programs/).
 
 Sample config: [`samples/configs/sim-plant.yaml`](samples/configs/sim-plant.yaml).
 
@@ -40,4 +43,4 @@ CI runs the same checks on every push and pull request.
 
 ## Status
 
-PR-01–PR-05 are in place (workspace through native FB primitives). Next: IR VM (PR-06) per the architecture plan.
+PR-01–PR-06 are in place (workspace through IR VM). Next: scan scheduler (PR-07) per the architecture plan.

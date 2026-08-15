@@ -1,0 +1,12 @@
+; Simple arithmetic + output demo (task entry)
+; Q0 := (I0 AND I1)  with quality gate on I0
+.header data_size=32 retain_size=0 input_slots=2 output_slots=1
+.entry task.main
+
+LD_I   0
+LD_IQ  0
+AND
+LD_I   1
+AND
+ST_Q   0
+HALT

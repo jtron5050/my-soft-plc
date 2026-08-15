@@ -1,0 +1,21 @@
+[package]
+name = "plc-vm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "IR v0.1 virtual machine interpreter (no alloc in run loop)"
+readme.workspace = true
+
+[dependencies]
+plc-ir = { workspace = true }
+plc-fb-primitives = { workspace = true }
+plc-types = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+
+[lints]
+workspace = true
