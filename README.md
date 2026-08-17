@@ -23,8 +23,9 @@ Rust monorepo (`crates/*`). Current crates:
 | [`plc-vm`](crates/plc-vm) | IR v0.1 interpreter (no alloc in run loop) |
 | [`plc-scan`](crates/plc-scan) | Cooperative scan scheduler, modes, software watchdog, TelemetrySource |
 | [`plc-retain`](crates/plc-retain) | Symbolic retain map, A/B NV store, T5 flush API |
+| [`plc-package`](crates/plc-package) | `.spkg` v1 container, JSON/JCS manifest, Ed25519 verify |
 
-Further crates (`plc-package`, …) land in later PRs per the architecture plan.
+Further crates (`plc-runtime`, `plc-api`, …) land in later PRs per the architecture plan.
 
 Sample programs (text-reviewable `fixture.spasm`): under [`samples/programs/`](samples/programs/).
 
@@ -45,4 +46,4 @@ CI runs the same checks on every push and pull request.
 
 ## Status
 
-PR-01–PR-08 are in place (workspace through retain store). Next: program package format (PR-09) per the architecture plan.
+PR-01–PR-09 are in place (workspace through signed `.spkg` packages). Next: dual-buffer load / epoch activate (PR-10) per the architecture plan.
