@@ -127,7 +127,10 @@ pass `capability_mode: read-only` to the reviewer (that skill explains why).
 
 ### 9. Hand off
 
-Print exactly this shape, filled in:
+Handoff is conditional on what `/review` actually did. Do not claim a
+PENDING review exists unless one was posted.
+
+**PENDING review posted** — print exactly:
 
 ```
 Shipped: <PR_URL>
@@ -136,8 +139,16 @@ Submit: <PR_URL>/files  →  Finish review → Submit review
 Then: /pr-babysit add <PR_NUMBER>
 ```
 
-If `/review` found no issues and posted nothing, say so and still print
-the PR URL and the babysit command.
+**Zero issues (no PENDING review created)** — print:
+
+```
+Shipped: <PR_URL>
+No PENDING review created (reviewer found no issues).
+Then: /pr-babysit add <PR_NUMBER>
+```
+
+**`/review` failed** — print the PR URL and the `/review` error. Do not
+claim a PENDING review exists.
 
 Do not run `/pr-babysit`. Do not `/loop`. Do not merge. Leave HEAD on the
 feature branch.
