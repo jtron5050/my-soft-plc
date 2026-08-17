@@ -100,8 +100,14 @@ fn golden_minimal_spkg_matches_builder() {
 fn pack_parse_round_trip() {
     let module = halt_module();
     let bytes = signed_bytes(manifest_for(&module), &module);
-    let parsed = parse_spkg(&bytes).unwrap();
-    assert_eq!(parsed.manifest.id, "minimal");
+    let framed = parse_spkg(&bytes).unwrap();
+    assert_eq!(framed.manifest.id, "minimal");
+    assert!(
+        framed.modules.is_empty(),
+        "parse_spkg must not run parse_spbc"
+    );
+    assert_eq!(write_spbc(&module).unwrap(), framed.sections[0]);
+    let parsed = validate(&bytes, VerifyPolicy::required(&[test_verifying_key()])).unwrap();
     assert_eq!(parsed.modules[0].code, module.code);
     assert_eq!(write_spbc(&parsed.modules[0]).unwrap(), parsed.sections[0]);
 }
@@ -332,7 +338,7 @@ HALT
         .unwrap();
     let err = validate(&bytes, VerifyPolicy::unsigned()).unwrap_err();
     assert!(
-        matches!(err, PackageError::Spbc(_)) || err.to_string().contains("retain"),
+        matches!(err, PackageError::ManifestSpbcMismatch(_)),
         "{err}"
     );
 }
@@ -357,6 +363,22 @@ NOP
         validate(&bytes, VerifyPolicy::unsigned()).unwrap_err(),
         PackageError::Verify(_)
     ));
+}
+
+#[test]
+fn policy_checked_before_spbc_parse() {
+    let module = halt_module();
+    let manifest = manifest_for(&module);
+    let json = manifest.to_jcs_bytes().unwrap();
+    let pkg = write_spkg(&json, &[b"not-spbc".to_vec()], &[0u8; SIGNATURE_LEN]).unwrap();
+    assert!(
+        parse_spkg(&pkg).is_ok(),
+        "framing must succeed without parsing the section"
+    );
+    assert_eq!(
+        validate(&pkg, VerifyPolicy::required(&[test_verifying_key()])).unwrap_err(),
+        PackageError::Unsigned
+    );
 }
 
 #[test]

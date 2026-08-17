@@ -1,6 +1,6 @@
 //! `.spkg` binary framing (magic, length-prefixed JSON, `spbc` sections, Ed25519).
 
-use plc_ir::{parse_spbc, IrModule};
+use plc_ir::IrModule;
 
 use crate::error::PackageError;
 use crate::jcs::looks_like_cbor;
@@ -18,7 +18,11 @@ pub const SIGNATURE_LEN: usize = 64;
 /// Minimum bytes for magic + version + empty-manifest length field.
 const MIN_HEADER: usize = 4 + 2 + 4;
 
-/// Parsed package (framing + JSON/JCS + `spbc` modules). Crypto is not checked.
+/// Parsed package (framing + JSON/JCS + raw sections). Crypto is not checked.
+///
+/// [`parse_spkg`] only splits the container. It does **not** run `parse_spbc`, so
+/// untrusted section bytes never reach the IR parser before a signature policy
+/// check. [`crate::validate`] fills [`Self::modules`] after `check_policy`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedPackage {
     /// Typed manifest.
@@ -30,12 +34,31 @@ pub struct ParsedPackage {
     /// Raw `spbc` section blobs in package order.
     pub sections: Vec<Vec<u8>>,
     /// Parsed modules (same order as [`Self::sections`]).
+    ///
+    /// Empty after [`parse_spkg`]; [`crate::validate`] fills this after the
+    /// signature policy check.
     pub modules: Vec<IrModule>,
     /// Trailing 64-byte Ed25519 signature (may be all-zero).
     pub signature: [u8; SIGNATURE_LEN],
 }
 
-/// Parse a complete `.spkg` buffer. Does not verify the signature or IR rules.
+fn read_u16_le(bytes: &[u8], off: usize, what: &'static str) -> Result<u16, PackageError> {
+    let arr: [u8; 2] = bytes
+        .get(off..off.saturating_add(2))
+        .and_then(|s| s.try_into().ok())
+        .ok_or(PackageError::Truncated(what))?;
+    Ok(u16::from_le_bytes(arr))
+}
+
+fn read_u32_le(bytes: &[u8], off: usize, what: &'static str) -> Result<u32, PackageError> {
+    let arr: [u8; 4] = bytes
+        .get(off..off.saturating_add(4))
+        .and_then(|s| s.try_into().ok())
+        .ok_or(PackageError::Truncated(what))?;
+    Ok(u32::from_le_bytes(arr))
+}
+
+/// Parse a complete `.spkg` buffer. Does not verify the signature or parse `spbc`.
 pub fn parse_spkg(bytes: &[u8]) -> Result<ParsedPackage, PackageError> {
     if bytes.len() > MAX_PACKAGE_BYTES {
         return Err(PackageError::TooLarge(bytes.len()));
@@ -54,11 +77,11 @@ pub fn parse_spkg(bytes: &[u8]) -> Result<ParsedPackage, PackageError> {
             Err(PackageError::BadMagic)
         };
     }
-    let version = u16::from_le_bytes(bytes[4..6].try_into().unwrap());
+    let version = read_u16_le(bytes, 4, "version")?;
     if version != SPKG_VERSION {
         return Err(PackageError::UnsupportedVersion(version));
     }
-    let manifest_len = u32::from_le_bytes(bytes[6..10].try_into().unwrap()) as usize;
+    let manifest_len = read_u32_le(bytes, 6, "manifest_len")? as usize;
     let manifest_start = 10usize;
     let manifest_end = manifest_start
         .checked_add(manifest_len)
@@ -70,21 +93,27 @@ pub fn parse_spkg(bytes: &[u8]) -> Result<ParsedPackage, PackageError> {
     let (manifest, manifest_canonical) = Manifest::from_json_bytes(&manifest_raw)?;
 
     let mut off = manifest_end;
-    if off + 4 > bytes.len() {
-        return Err(PackageError::Truncated("section_count"));
-    }
-    let section_count = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
+    let section_count = read_u32_le(bytes, off, "section_count")?;
     off += 4;
     if section_count == 0 {
         return Err(PackageError::SectionCount(0));
     }
 
+    // Untrusted `u32`: each section is at least a 4-byte length prefix, and the
+    // signature must still fit. Bound before `with_capacity` so a huge count in
+    // a small buffer cannot OOM.
+    let max_sections = bytes
+        .len()
+        .saturating_sub(off)
+        .saturating_sub(SIGNATURE_LEN)
+        / 4;
+    if section_count as usize > max_sections {
+        return Err(PackageError::Truncated("section_count"));
+    }
+
     let mut sections = Vec::with_capacity(section_count as usize);
     for _ in 0..section_count {
-        if off + 4 > bytes.len() {
-            return Err(PackageError::Truncated("section length"));
-        }
-        let section_len = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
+        let section_len = read_u32_le(bytes, off, "section length")? as usize;
         off += 4;
         let end = off
             .checked_add(section_len)
@@ -105,17 +134,12 @@ pub fn parse_spkg(bytes: &[u8]) -> Result<ParsedPackage, PackageError> {
     let mut signature = [0u8; SIGNATURE_LEN];
     signature.copy_from_slice(&bytes[off..off + SIGNATURE_LEN]);
 
-    let mut modules = Vec::with_capacity(sections.len());
-    for section in &sections {
-        modules.push(parse_spbc(section)?);
-    }
-
     Ok(ParsedPackage {
         manifest,
         manifest_raw,
         manifest_canonical,
         sections,
-        modules,
+        modules: Vec::new(),
         signature,
     })
 }
@@ -180,6 +204,40 @@ mod tests {
         assert_eq!(
             parse_spkg(&bytes).unwrap_err(),
             PackageError::UnsupportedVersion(2)
+        );
+    }
+
+    /// Valid enough for [`Manifest::from_json_bytes`] so we can reach section_count.
+    const MIN_MANIFEST: &[u8] = br#"{
+        "id":"minimal",
+        "version":"0.1.0",
+        "build_id":"b",
+        "ir_major":0,
+        "ir_minor":1,
+        "primitive_abi":1,
+        "task_entries":{"main":"task.main"},
+        "retain_symbols":[],
+        "tag_dictionary":[],
+        "restart_policy":"safe_reset",
+        "compatibility_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }"#;
+
+    #[test]
+    fn huge_section_count_is_truncated_not_oom() {
+        let mut bytes = Vec::from(*SPKG_MAGIC);
+        bytes.extend_from_slice(&SPKG_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&(MIN_MANIFEST.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(MIN_MANIFEST);
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; SIGNATURE_LEN]);
+        assert!(
+            bytes.len() < 4096,
+            "regression buffer must stay tiny (got {})",
+            bytes.len()
+        );
+        assert_eq!(
+            parse_spkg(&bytes).unwrap_err(),
+            PackageError::Truncated("section_count")
         );
     }
 }

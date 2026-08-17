@@ -1,4 +1,4 @@
-//! Signed program package format (architecture PR-09).
+//! Signed program package format.
 //!
 //! `.spkg` v1 is a little-endian container:
 //!
@@ -12,7 +12,7 @@
 //! signature [u8; 64]    // Ed25519 over SHA-256(JCS ‖ bytecode…)
 //! ```
 //!
-//! This crate is **non-RT**. Dual-buffer arm/activate lives in PR-10.
+//! This crate is **non-RT**: it must not pull Tokio or network crates.
 
 #![forbid(unsafe_code)]
 

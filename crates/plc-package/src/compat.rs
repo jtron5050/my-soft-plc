@@ -19,7 +19,7 @@ pub fn compute_compatibility_hash(manifest: &Manifest) -> String {
     hex_encode(&Sha256::digest(compatibility_preimage(manifest)))
 }
 
-/// Raw compatibility preimage bytes (exported so PR-15 can match exactly).
+/// Raw compatibility preimage bytes.
 #[must_use]
 pub fn compatibility_preimage(manifest: &Manifest) -> Vec<u8> {
     let mut out = Vec::new();

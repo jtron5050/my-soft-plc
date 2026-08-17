@@ -1,15 +1,15 @@
 //! Upload-time validation: signature, one `spbc` section, IR verify, cross-checks.
 
-use plc_ir::{verify_module, IR_MAJOR, IR_MINOR};
+use plc_ir::{parse_spbc, verify_module, IR_MAJOR, IR_MINOR};
 
 use crate::compat::compute_compatibility_hash;
 use crate::error::PackageError;
 use crate::format::{parse_spkg, ParsedPackage};
 use crate::sign::{check_policy, signing_preimage, VerifyPolicy};
 
-/// Parse, verify signature policy, require one section, verify IR, cross-check.
+/// Frame, check signature policy, then parse/verify the single `spbc` section.
 pub fn validate(bytes: &[u8], policy: VerifyPolicy<'_>) -> Result<ParsedPackage, PackageError> {
-    let parsed = parse_spkg(bytes)?;
+    let mut parsed = parse_spkg(bytes)?;
     let preimage = signing_preimage(&parsed.manifest_canonical, &parsed.sections);
     check_policy(policy, &parsed.signature, &preimage)?;
 
@@ -18,8 +18,9 @@ pub fn validate(bytes: &[u8], policy: VerifyPolicy<'_>) -> Result<ParsedPackage,
         return Err(PackageError::SectionCount(count));
     }
 
-    let module = &parsed.modules[0];
-    verify_module(module)?;
+    let module = parse_spbc(&parsed.sections[0])?;
+    verify_module(&module)?;
+    parsed.modules = vec![module];
     cross_check(&parsed)?;
 
     let expected = compute_compatibility_hash(&parsed.manifest);

@@ -22,6 +22,12 @@ pub fn parse_spbc(bytes: &[u8]) -> Result<IrModule, IrError> {
     let entry_count = u32::from_le_bytes(bytes[32..36].try_into().unwrap());
 
     let mut off = 36usize;
+    // Untrusted `u32`: each entry is at least name_len (1) + pc (4). Bound
+    // before `with_capacity` so a huge count in a small buffer cannot OOM.
+    let max_entries = bytes.len().saturating_sub(off) / 5;
+    if entry_count as usize > max_entries {
+        return Err(IrError::Spbc("truncated entry table".into()));
+    }
     let mut entries = Vec::with_capacity(entry_count as usize);
     for _ in 0..entry_count {
         if off >= bytes.len() {
@@ -132,5 +138,26 @@ HALT
         let m2 = parse_spbc(&bytes).unwrap();
         assert_eq!(m2.entries[0].name, "task.main");
         assert_eq!(m2.code, m.code);
+    }
+
+    #[test]
+    fn huge_entry_count_is_truncated_not_oom() {
+        let mut bytes = Vec::from(*SPBC_MAGIC);
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        for _ in 0..6 {
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+        }
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        assert!(
+            bytes.len() < 64,
+            "regression buffer must stay tiny (got {})",
+            bytes.len()
+        );
+        assert!(matches!(
+            parse_spbc(&bytes),
+            Err(IrError::Spbc(msg)) if msg.contains("truncated")
+        ));
     }
 }

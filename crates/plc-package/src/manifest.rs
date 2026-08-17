@@ -10,7 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::error::PackageError;
 use crate::jcs::parse_strict_json;
 
-/// Output restart policy. There is no separate `bumpless` boolean.
+/// Output restart policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RestartPolicy {
@@ -109,6 +109,7 @@ impl<'de> Deserialize<'de> for IrTypeName {
 
 /// One retained symbol in the manifest (name + type + retain-segment offset).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ManifestRetainSymbol {
     /// IEC path (e.g. `Line.Hours`).
     pub name: String,
@@ -121,6 +122,7 @@ pub struct ManifestRetainSymbol {
 
 /// One tag-dictionary entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TagEntry {
     /// Tag path used by telemetry / tools.
     pub name: String,
@@ -148,7 +150,7 @@ pub struct Manifest {
     pub ir_major: u16,
     /// Must match `spbc` / [`plc_ir::IR_MINOR`].
     pub ir_minor: u16,
-    /// Primitive ABI number (compared to the running runtime in PR-10).
+    /// Primitive ABI number; must match the runtime that will execute the package.
     pub primitive_abi: u32,
     /// Task name → IR entry symbol (e.g. `main` → `task.main`).
     pub task_entries: BTreeMap<String, String>,
@@ -216,6 +218,15 @@ impl Manifest {
                     "task_entries keys and values must be non-empty",
                 ));
             }
+            reject_ascii_controls("task name", name)?;
+        }
+        for sym in &self.retain_symbols {
+            reject_ascii_controls("retain name", &sym.name)?;
+        }
+        for tag in &self.tag_dictionary {
+            if tag.kind == TagKind::Q {
+                reject_ascii_controls("%Q name", &tag.name)?;
+            }
         }
         if !is_lowercase_hex_sha256(&self.compatibility_hash) {
             return Err(PackageError::manifest(
@@ -232,7 +243,10 @@ impl Manifest {
             .iter()
             .map(|s| RetainSymbol::new(s.name.clone(), s.ty.0, s.offset))
             .collect();
-        Ok(RetainLayout::new(retain_size, symbols)?)
+        RetainLayout::new(retain_size, symbols).map_err(|e| match e {
+            plc_ir::IrError::RetainLayout(msg) => PackageError::mismatch(msg),
+            other => PackageError::from(other),
+        })
     }
 }
 
@@ -252,6 +266,16 @@ pub fn validate_program_id(id: &str) -> Result<(), PackageError> {
 
 fn is_lowercase_hex_sha256(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Compatibility preimage uses `\t` / `\n` as delimiters with no escaping.
+fn reject_ascii_controls(label: &str, name: &str) -> Result<(), PackageError> {
+    if name.bytes().any(|b| b < 0x20 || b == 0x7F) {
+        return Err(PackageError::manifest(format!(
+            "{label} must not contain ASCII control characters"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -282,5 +306,46 @@ mod tests {
     fn rejects_bad_program_id() {
         assert!(validate_program_id("../x").is_err());
         assert!(validate_program_id("ok_id.1").is_ok());
+    }
+
+    #[test]
+    fn rejects_unknown_nested_field_on_retain_symbol() {
+        let json = br#"{
+            "id": "plant-line-a",
+            "version": "1.0.0",
+            "build_id": "b",
+            "ir_major": 0,
+            "ir_minor": 1,
+            "primitive_abi": 1,
+            "task_entries": {"main": "task.main"},
+            "retain_symbols": [{"name": "Line.Hours", "type": "DINT", "offset": 0, "extra": 1}],
+            "tag_dictionary": [],
+            "restart_policy": "safe_reset",
+            "compatibility_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }"#;
+        let err = Manifest::from_json_bytes(json).unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
+    }
+
+    #[test]
+    fn rejects_tab_in_retain_name() {
+        let json = br#"{
+            "id": "plant-line-a",
+            "version": "1.0.0",
+            "build_id": "b",
+            "ir_major": 0,
+            "ir_minor": 1,
+            "primitive_abi": 1,
+            "task_entries": {"main": "task.main"},
+            "retain_symbols": [{"name": "Line\tHours", "type": "DINT", "offset": 0}],
+            "tag_dictionary": [],
+            "restart_policy": "safe_reset",
+            "compatibility_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }"#;
+        let err = Manifest::from_json_bytes(json).unwrap_err();
+        assert!(
+            err.to_string().contains("retain name") && err.to_string().contains("control"),
+            "{err}"
+        );
     }
 }
