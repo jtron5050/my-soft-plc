@@ -24,6 +24,9 @@ pub enum IrError {
         /// Symbol text.
         name: String,
     },
+    /// Retain layout rejected (duplicate name, overlap, or out of bounds).
+    #[error("retain layout: {0}")]
+    RetainLayout(String),
 }
 
 /// Verifier rule violations (checklist A.6).

@@ -1,0 +1,18 @@
+[package]
+name = "plc-retain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Symbolic retain memory store, A/B NV files, and T5 flush API"
+readme.workspace = true
+
+[dependencies]
+plc-types = { workspace = true }
+plc-ir = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

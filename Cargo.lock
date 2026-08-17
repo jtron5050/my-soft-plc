@@ -82,6 +82,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "plc-retain"
+version = "0.1.0"
+dependencies = [
+ "plc-ir",
+ "plc-types",
+ "thiserror",
+]
+
+[[package]]
 name = "plc-scan"
 version = "0.1.0"
 dependencies = [

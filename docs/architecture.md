@@ -936,7 +936,7 @@ Greenfield: all interfaces are new. Frozen contracts for implementers:
 
 **Program store:** `/var/lib/soft-plc/programs/<id>/`; pointers `current`, `armed`.
 
-**Retain store:** `/var/lib/soft-plc/retain/<program_id>.ret` with magic, schema hash, payload.
+**Retain store:** `/var/lib/soft-plc/retain/<program_id>.ret` (logical name) with magic, schema hash, payload. On disk this is A/B slots `<id>.ret.0` / `<id>.ret.1` plus `<id>.ret.idx` (committed slot + generation).
 
 **Migrations:** version fields; forward-only or refuse boot with clear error.
 

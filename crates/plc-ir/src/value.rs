@@ -50,4 +50,30 @@ impl IrType {
             Self::Bool | Self::Int | Self::Dint | Self::Time | Self::Lint
         )
     }
+
+    /// Byte width when stored in the data/retain byte image.
+    #[must_use]
+    pub const fn byte_width(self) -> usize {
+        match self {
+            Self::Bool => 1,
+            Self::Int => 2,
+            Self::Dint | Self::Real | Self::Time => 4,
+            Self::Lint => 8,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ir_type_byte_width() {
+        assert_eq!(IrType::Bool.byte_width(), 1);
+        assert_eq!(IrType::Int.byte_width(), 2);
+        assert_eq!(IrType::Dint.byte_width(), 4);
+        assert_eq!(IrType::Real.byte_width(), 4);
+        assert_eq!(IrType::Time.byte_width(), 4);
+        assert_eq!(IrType::Lint.byte_width(), 8);
+    }
 }

@@ -10,6 +10,7 @@ mod encode;
 mod error;
 mod module;
 mod opcode;
+mod retain;
 mod spbc;
 mod value;
 mod verify;
@@ -19,6 +20,7 @@ pub use encode::{decode_instruction, encode_instruction, pack_word, DecodedInstr
 pub use error::{IrError, VerifyError};
 pub use module::{EntryPoint, IrModule, SpbcHeader, IR_MAJOR, IR_MINOR, SPBC_MAGIC};
 pub use opcode::{Opcode, PrimitiveId};
+pub use retain::{RetainLayout, RetainSymbol};
 pub use spbc::{parse_spbc, write_spbc};
 pub use value::IrType;
 pub use verify::verify_module;
