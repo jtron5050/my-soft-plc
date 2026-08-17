@@ -74,10 +74,11 @@ If inspection shows there is nothing to change, stop. Do not open an empty PR.
 
 ### 4. Verify
 
-Run the Build & Test commands from `AGENTS.md`. Skip commands that do not
-apply (for example skip `cargo` when no Rust files changed; skip
-`check-rt-deps.sh` when no RT-path crate changed). If a required check
-fails, fix it or stop. Do not push a red tree.
+Run every Build & Test command `AGENTS.md` lists unconditionally
+(`cargo fmt` / `clippy` / `test` even when no Rust files changed). Skip
+only commands that file itself marks as situational (`check-rt-deps.sh`
+when no RT-path crate changed). If a required check fails, fix it or
+stop. Do not push a red tree.
 
 ### 5. Commit
 
