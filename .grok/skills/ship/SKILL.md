@@ -109,9 +109,19 @@ Record `PR_NUMBER` and `PR_URL`.
 
 ### 8. Review
 
-If this head SHA already has a GitHub review in `PENDING` state, skip.
+Query the authenticated user's PENDING review on this PR
+(`GET /repos/{owner}/{repo}/pulls/{n}/reviews` — PENDING rows are only
+returned for the current user):
 
-Otherwise load the bundled `/review` skill and execute it as
+- Same `commit_id` as HEAD → skip `/review`.
+- Different `commit_id` → `DELETE` that pending review
+  (`DELETE /repos/{owner}/{repo}/pulls/{n}/reviews/{id}`), then run
+  `/review`.
+- No PENDING review for the current user → run `/review`.
+
+Do not treat another user's PENDING review as a skip.
+
+When not skipping, load the bundled `/review` skill and execute it as
 `/review --pr <PR_NUMBER>`. Do not invent a parallel review path. Do not
 pass `capability_mode: read-only` to the reviewer (that skill explains why).
 
