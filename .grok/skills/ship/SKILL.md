@@ -54,8 +54,15 @@ Slug: lowercase, hyphens, from the request, ≤50 characters.
 
 - If HEAD is the default branch (`main`):
   `git checkout -b <prefix>/<slug> origin/main`. Never commit on `main`.
-- If HEAD already starts with `feature/`, `fix/`, or `chore/`: keep it.
-- If HEAD is detached: create `<prefix>/<slug>` from `origin/main` and
+- If HEAD already starts with `feature/`, `fix/`, or `chore/`: keep it
+  only when this request is already that branch's work — shipping these
+  uncommitted changes, shipping commits already on the branch, or the
+  user said to add to this PR. If the branch is already ahead of
+  `origin/main` or already has a PR **and** the argument is a new
+  implementation, create `<prefix>/<slug>` from `origin/main` instead.
+  Do not pile an unrelated change onto an existing branch or PR.
+- If HEAD is detached, or the branch name is anything else (not `main`,
+  not a prefix branch): create `<prefix>/<slug>` from `origin/main` and
   cherry-pick or apply the intended work there.
 
 ### 3. Implement
