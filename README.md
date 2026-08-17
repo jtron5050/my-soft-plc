@@ -21,8 +21,9 @@ Rust monorepo (`crates/*`). Current crates:
 | [`plc-ir`](crates/plc-ir) | IR v0.1 types, `spbc` framing, verifier, `spasm` assembler |
 | [`plc-fb-primitives`](crates/plc-fb-primitives) | Native FBs: TON/TOF/TP, CTU/CTD, RS/SR, edges, PID |
 | [`plc-vm`](crates/plc-vm) | IR v0.1 interpreter (no alloc in run loop) |
+| [`plc-scan`](crates/plc-scan) | Cooperative scan scheduler, modes, software watchdog, TelemetrySource |
 
-Further crates (`plc-scan`, …) land in later PRs per the architecture plan.
+Further crates (`plc-retain`, …) land in later PRs per the architecture plan.
 
 Sample programs (text-reviewable `fixture.spasm`): under [`samples/programs/`](samples/programs/).
 
@@ -43,4 +44,4 @@ CI runs the same checks on every push and pull request.
 
 ## Status
 
-PR-01–PR-06 are in place (workspace through IR VM). Next: scan scheduler (PR-07) per the architecture plan.
+PR-01–PR-07 are in place (workspace through scan scheduler). Next: retain memory store (PR-08) per the architecture plan.

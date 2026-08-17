@@ -1,0 +1,23 @@
+[package]
+name = "plc-scan"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Cooperative scan scheduler, modes, software watchdog, and TelemetrySource SPSC"
+readme.workspace = true
+
+[dependencies]
+plc-types = { workspace = true }
+plc-config = { workspace = true }
+plc-io = { workspace = true }
+plc-vm = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+plc-io-sim = { workspace = true }
+
+[lints]
+workspace = true

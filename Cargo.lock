@@ -82,6 +82,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "plc-scan"
+version = "0.1.0"
+dependencies = [
+ "plc-config",
+ "plc-io",
+ "plc-io-sim",
+ "plc-types",
+ "plc-vm",
+ "thiserror",
+]
+
+[[package]]
 name = "plc-types"
 version = "0.1.0"
 
