@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/plc-types",
     "crates/plc-config",
+    "crates/plc-auth",
     "crates/plc-io",
     "crates/plc-io-sim",
     "crates/plc-ir",
@@ -30,6 +31,7 @@ readme = "README.md"
 [workspace.dependencies]
 plc-types = { path = "crates/plc-types", version = "0.1.0" }
 plc-config = { path = "crates/plc-config", version = "0.1.0" }
+plc-auth = { path = "crates/plc-auth", version = "0.1.0" }
 plc-io = { path = "crates/plc-io", version = "0.1.0" }
 plc-io-sim = { path = "crates/plc-io-sim", version = "0.1.0" }
 plc-ir = { path = "crates/plc-ir", version = "0.1.0" }
