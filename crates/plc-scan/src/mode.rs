@@ -113,6 +113,14 @@ impl ModeCell {
         self.rejected.load(Ordering::Relaxed)
     }
 
+    /// Drop a pending request and count it as rejected (phase `swapping`).
+    pub fn reject_pending(&self) {
+        let raw = self.pending.swap(REQ_NONE, Ordering::AcqRel);
+        if decode_request(raw).is_some() {
+            self.rejected.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// Apply a pending request at an invocation boundary.
     ///
     /// Returns the new mode and whether forces should be cleared.

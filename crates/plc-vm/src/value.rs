@@ -58,6 +58,44 @@ impl VmValue {
         }
     }
 
+    /// Decode a little-endian payload as `ty`.
+    pub fn from_le_bytes(ty: IrType, bytes: &[u8]) -> Result<Self, crate::VmError> {
+        let width = Self::zero(ty).byte_width();
+        if bytes.len() < width {
+            return Err(crate::VmError::Bounds {
+                pc: 0,
+                detail: format!(
+                    "value decode: {ty:?} needs {width} bytes, got {}",
+                    bytes.len()
+                ),
+            });
+        }
+        let v = match ty {
+            IrType::Bool => Self::Bool(bytes[0] != 0),
+            IrType::Int => {
+                let b: [u8; 2] = bytes[..2].try_into().expect("width checked");
+                Self::Int(i16::from_le_bytes(b))
+            }
+            IrType::Dint => {
+                let b: [u8; 4] = bytes[..4].try_into().expect("width checked");
+                Self::Dint(i32::from_le_bytes(b))
+            }
+            IrType::Time => {
+                let b: [u8; 4] = bytes[..4].try_into().expect("width checked");
+                Self::Time(i32::from_le_bytes(b))
+            }
+            IrType::Real => {
+                let b: [u8; 4] = bytes[..4].try_into().expect("width checked");
+                Self::Real(f32::from_bits(u32::from_le_bytes(b)))
+            }
+            IrType::Lint => {
+                let b: [u8; 8] = bytes[..8].try_into().expect("width checked");
+                Self::Lint(i64::from_le_bytes(b))
+            }
+        };
+        Ok(v)
+    }
+
     /// Interpret as BOOL (non-bool → false).
     #[must_use]
     pub const fn as_bool(self) -> bool {

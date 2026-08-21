@@ -51,6 +51,11 @@ pub struct Vm {
     pub div0_count: u32,
     /// Set when any ST_RETAIN executes this run (or since clear).
     pub retain_dirty: bool,
+    /// Per-invocation first-scan bit published by the scan engine.
+    ///
+    /// IR v0.1 has no `SYSTEM` load opcode, so `run_at` does not consume this
+    /// flag. Hosts may read it via [`Self::first_scan`]; task logic cannot.
+    first_scan: bool,
 }
 
 impl Vm {
@@ -96,6 +101,7 @@ impl Vm {
             instruction_budget: config.instruction_budget,
             div0_count: 0,
             retain_dirty: false,
+            first_scan: false,
         })
     }
 
@@ -106,11 +112,11 @@ impl Vm {
     }
 
     /// Cold-reset non-retain state (data, outputs, primitives, stack); retain kept.
+    ///
+    /// Fills existing buffers in place (arm-time / CS-safe; no reallocation).
     pub fn cold_reset_non_retain(&mut self) {
-        let n = self.data.len();
-        self.data = ByteSegment::zeros(n);
-        let nq = self.outputs.len();
-        self.outputs = SlotImage::bools(nq);
+        self.data.fill_zero();
+        self.outputs.fill_bool_false();
         self.primitives.cold_reset_all();
         self.sp = 0;
         self.fp = 0;
@@ -149,6 +155,75 @@ impl Vm {
         &self.retain
     }
 
+    /// Mutable retain segment (arm-time shadow install / tests).
+    pub fn retain_mut(&mut self) -> &mut ByteSegment {
+        &mut self.retain
+    }
+
+    /// Copy a byte range from `src`'s retain segment into this retain image.
+    pub fn blit_retain_from(
+        &mut self,
+        dst: usize,
+        src: &Self,
+        src_off: usize,
+        len: usize,
+    ) -> Result<(), VmError> {
+        self.retain.blit_from(dst, &src.retain, src_off, len)
+    }
+
+    /// Tag and store a packed retain image using `layout` (non-RT arm path).
+    pub fn load_retain_image(
+        &mut self,
+        image: &[u8],
+        layout: &plc_ir::RetainLayout,
+    ) -> Result<(), VmError> {
+        if image.len() != self.retain.len() {
+            return Err(VmError::Bounds {
+                pc: 0,
+                detail: format!(
+                    "retain image {} != segment {}",
+                    image.len(),
+                    self.retain.len()
+                ),
+            });
+        }
+        if layout.retain_size as usize != image.len() {
+            return Err(VmError::Bounds {
+                pc: 0,
+                detail: format!(
+                    "retain layout size {} != image {}",
+                    layout.retain_size,
+                    image.len()
+                ),
+            });
+        }
+        for sym in &layout.symbols {
+            let off = sym.offset as usize;
+            let width = sym.ty.byte_width();
+            let end = off.saturating_add(width);
+            if end > image.len() {
+                return Err(VmError::Bounds {
+                    pc: 0,
+                    detail: format!("retain symbol {} OOB", sym.name),
+                });
+            }
+            let v = VmValue::from_le_bytes(sym.ty, &image[off..end])?;
+            self.retain.store(off, v, 0)?;
+        }
+        Ok(())
+    }
+
+    /// Engine-facing first-scan bit for this invocation (not IR-visible).
+    #[must_use]
+    pub fn first_scan(&self) -> bool {
+        self.first_scan
+    }
+
+    /// Scan engine: publish the per-task first-scan bit for this invocation.
+    pub fn set_first_scan(&mut self, v: bool) {
+        self.first_scan = v;
+    }
+
     /// Inputs image.
     #[must_use]
     pub fn inputs(&self) -> &SlotImage {
@@ -171,7 +246,13 @@ impl Vm {
         &mut self.outputs
     }
 
-    /// Primitive store (tests).
+    /// Primitive store (tests / hot-swap policy).
+    #[must_use]
+    pub fn primitives(&self) -> &PrimitiveStore {
+        &self.primitives
+    }
+
+    /// Mutable primitive store (tests).
     pub fn primitives_mut(&mut self) -> &mut PrimitiveStore {
         &mut self.primitives
     }
@@ -188,6 +269,7 @@ impl Vm {
         self.sp = 0;
         self.fp = 0;
         self.data_base = 0;
+        self.outputs.clear_written();
 
         let mut pc = start_pc;
         let mut steps = 0u64;

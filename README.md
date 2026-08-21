@@ -24,8 +24,9 @@ Rust monorepo (`crates/*`). Current crates:
 | [`plc-scan`](crates/plc-scan) | Cooperative scan scheduler, modes, software watchdog, TelemetrySource |
 | [`plc-retain`](crates/plc-retain) | Symbolic retain map, A/B NV store, T5 flush API |
 | [`plc-package`](crates/plc-package) | `.spkg` v1 container, JSON/JCS manifest, Ed25519 verify |
+| [`plc-runtime`](crates/plc-runtime) | Dual-buffer load, epoch activate, hot-swap policy glue |
 
-Further crates (`plc-runtime`, `plc-api`, …) land in later PRs per the architecture plan.
+Further crates (`plc-api`, `plc-telemetry`, …) land in later PRs per the architecture plan.
 
 Sample programs (text-reviewable `fixture.spasm`): under [`samples/programs/`](samples/programs/).
 
@@ -46,4 +47,4 @@ CI runs the same checks on every push and pull request.
 
 ## Status
 
-PR-01–PR-09 are in place (workspace through signed `.spkg` packages). Next: dual-buffer load / epoch activate (PR-10) per the architecture plan.
+PR-01–PR-10 are in place (workspace through dual-buffer load / epoch activate). Next: authn/authz primitives (PR-11) per the architecture plan.

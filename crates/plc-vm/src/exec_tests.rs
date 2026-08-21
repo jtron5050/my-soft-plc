@@ -45,4 +45,24 @@ HALT
         let err = vm.run_entry("task.main", 0).unwrap_err();
         assert!(err.to_string().contains("underflow"));
     }
+
+    #[test]
+    fn st_q_marks_written_and_run_at_clears_unwritten() {
+        let src = r"
+.header data_size=0 input_slots=0 output_slots=2
+.entry task.main
+PUSHI_BOOL 1
+ST_Q 0
+HALT
+";
+        let mut vm = Vm::from_spasm(src, &VmConfig::default()).unwrap();
+        assert_eq!(vm.run_entry("task.main", 0).unwrap(), ExecResult::Halted);
+        assert!(vm.outputs().written(0));
+        assert!(!vm.outputs().written(1));
+        vm.outputs_mut().set(1, VmValue::Bool(true), 0).unwrap();
+        assert!(vm.outputs().written(1));
+        assert_eq!(vm.run_entry("task.main", 0).unwrap(), ExecResult::Halted);
+        assert!(vm.outputs().written(0));
+        assert!(!vm.outputs().written(1));
+    }
 }

@@ -35,5 +35,5 @@ Do not pull `tokio` or network crates onto the RT path.
 
 ## Architecture
 
-- Follow `docs/architecture.md`. Current landed work is PR-01–PR-08. Next planned item is PR-09 (program package format).
+- Follow `docs/architecture.md`. Current landed work is PR-01–PR-10. Next planned item is PR-11 (authn/authz primitives).
 - Do not invent crates or public APIs that contradict the architecture plan without an explicit design change.

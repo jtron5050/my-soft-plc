@@ -264,6 +264,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "plc-runtime"
+version = "0.1.0"
+dependencies = [
+ "plc-config",
+ "plc-fb-primitives",
+ "plc-io",
+ "plc-io-sim",
+ "plc-ir",
+ "plc-package",
+ "plc-retain",
+ "plc-scan",
+ "plc-types",
+ "plc-vm",
+ "thiserror",
+]
+
+[[package]]
 name = "plc-scan"
 version = "0.1.0"
 dependencies = [

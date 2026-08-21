@@ -63,6 +63,18 @@ impl Pid {
         self.initialized = false;
     }
 
+    /// Integrator accumulator (tests / hot-swap policy).
+    #[must_use]
+    pub const fn integral(&self) -> f32 {
+        self.integral
+    }
+
+    /// Whether the controller has taken a sample since cold-init.
+    #[must_use]
+    pub const fn is_initialized(&self) -> bool {
+        self.initialized
+    }
+
     /// Evaluate one sample.
     ///
     /// - `pv`: process variable
@@ -150,6 +162,7 @@ mod tests {
         pid.eval(0.0, 1.0, true, 500);
         pid.cold_reset();
         assert!((pid.out).abs() < 1e-6);
-        assert!(!pid.initialized);
+        assert!((pid.integral()).abs() < 1e-6);
+        assert!(!pid.is_initialized());
     }
 }
