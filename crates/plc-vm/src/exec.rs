@@ -51,7 +51,10 @@ pub struct Vm {
     pub div0_count: u32,
     /// Set when any ST_RETAIN executes this run (or since clear).
     pub retain_dirty: bool,
-    /// `SYSTEM.FirstScan` for the current invocation (set by the scan engine).
+    /// Per-invocation first-scan bit published by the scan engine.
+    ///
+    /// IR v0.1 has no `SYSTEM` load opcode, so `run_at` does not consume this
+    /// flag. Hosts may read it via [`Self::first_scan`]; task logic cannot.
     first_scan: bool,
 }
 
@@ -109,11 +112,11 @@ impl Vm {
     }
 
     /// Cold-reset non-retain state (data, outputs, primitives, stack); retain kept.
+    ///
+    /// Fills existing buffers in place (arm-time / CS-safe; no reallocation).
     pub fn cold_reset_non_retain(&mut self) {
-        let n = self.data.len();
-        self.data = ByteSegment::zeros(n);
-        let nq = self.outputs.len();
-        self.outputs = SlotImage::bools(nq);
+        self.data.fill_zero();
+        self.outputs.fill_bool_false();
         self.primitives.cold_reset_all();
         self.sp = 0;
         self.fp = 0;
@@ -210,13 +213,13 @@ impl Vm {
         Ok(())
     }
 
-    /// `SYSTEM.FirstScan` as seen by the current invocation.
+    /// Engine-facing first-scan bit for this invocation (not IR-visible).
     #[must_use]
     pub fn first_scan(&self) -> bool {
         self.first_scan
     }
 
-    /// Scan engine: publish the per-task FirstScan bit for this invocation.
+    /// Scan engine: publish the per-task first-scan bit for this invocation.
     pub fn set_first_scan(&mut self, v: bool) {
         self.first_scan = v;
     }
@@ -266,6 +269,7 @@ impl Vm {
         self.sp = 0;
         self.fp = 0;
         self.data_base = 0;
+        self.outputs.clear_written();
 
         let mut pc = start_pc;
         let mut steps = 0u64;

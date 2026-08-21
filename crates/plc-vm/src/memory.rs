@@ -139,6 +139,12 @@ impl ByteSegment {
         self.bytes.get(offset).is_some_and(|b| *b != 0)
     }
 
+    /// Zero bytes and clear type tags in place (no reallocation).
+    pub fn fill_zero(&mut self) {
+        self.bytes.fill(0);
+        self.tags.fill(TAG_UNSET);
+    }
+
     /// Copy `len` bytes and type tags from `src` (arm/activate retain blit).
     pub fn blit_from(
         &mut self,
@@ -171,6 +177,8 @@ pub struct SlotImage {
     values: Vec<VmValue>,
     /// Per-input quality Good? (parallel to inputs only; outputs unused).
     quality_good: Vec<bool>,
+    /// Slots `ST_Q`/`set` wrote since the last [`Self::clear_written`].
+    written: Vec<bool>,
 }
 
 impl SlotImage {
@@ -180,6 +188,7 @@ impl SlotImage {
         Self {
             values: vec![VmValue::Bool(false); n],
             quality_good: vec![true; n],
+            written: vec![false; n],
         }
     }
 
@@ -206,14 +215,35 @@ impl SlotImage {
             })
     }
 
-    /// Set value.
+    /// Set value and mark the slot written for this invocation.
     pub fn set(&mut self, idx: usize, value: VmValue, pc: usize) -> Result<(), VmError> {
         let slot = self.values.get_mut(idx).ok_or_else(|| VmError::Bounds {
             pc,
             detail: format!("slot {idx}"),
         })?;
         *slot = value;
+        if let Some(w) = self.written.get_mut(idx) {
+            *w = true;
+        }
         Ok(())
+    }
+
+    /// True when this invocation stored the slot (`ST_Q` / `set`).
+    #[must_use]
+    pub fn written(&self, idx: usize) -> bool {
+        self.written.get(idx).copied().unwrap_or(false)
+    }
+
+    /// Clear the per-invocation written mask (start of `run_at`).
+    pub fn clear_written(&mut self) {
+        self.written.fill(false);
+    }
+
+    /// Reset slots to BOOL false / Good and clear the written mask (no realloc).
+    pub fn fill_bool_false(&mut self) {
+        self.values.fill(VmValue::Bool(false));
+        self.quality_good.fill(true);
+        self.written.fill(false);
     }
 
     /// Quality Good? for input slot.

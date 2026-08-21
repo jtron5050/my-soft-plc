@@ -31,7 +31,8 @@ pub struct RetainCopy {
 
 /// Buffer B: a validated program ready for epoch activate.
 pub struct ArmedProgram {
-    /// Loaded VM (non-retain cold; retain shadow already installed).
+    /// Loaded VM. Non-retain is cold-reset at [`crate::ScanEngine::arm`]; retain
+    /// shadow is installed by the loader before arm. CS only blits keep-set bytes.
     pub vm: Vm,
     /// Program id (package manifest).
     pub program_id: String,

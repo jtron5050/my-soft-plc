@@ -66,11 +66,53 @@ ST_Q       0
 HALT
 "#;
 
+const Q_BOTH_TRUE: &str = r#"
+.header data_size=8 retain_size=0 input_slots=0 output_slots=2
+.entry task.main
+PUSHI_BOOL 1
+ST_Q       0
+PUSHI_BOOL 1
+ST_Q       1
+HALT
+"#;
+
+const Q_ONLY0_FALSE: &str = r#"
+.header data_size=8 retain_size=0 input_slots=0 output_slots=2
+.entry task.main
+PUSHI_BOOL 0
+ST_Q       0
+HALT
+"#;
+
 const MULTI_NOP: &str = r#"
 .header data_size=8 retain_size=0 input_slots=0 output_slots=2
 .entry task.fast
 HALT
 .entry task.slow
+HALT
+"#;
+
+const MULTI_Q_TRUE: &str = r#"
+.header data_size=8 retain_size=0 input_slots=0 output_slots=2
+.entry task.fast
+PUSHI_BOOL 1
+ST_Q       0
+HALT
+.entry task.slow
+PUSHI_BOOL 1
+ST_Q       1
+HALT
+"#;
+
+const MULTI_Q_FALSE: &str = r#"
+.header data_size=8 retain_size=0 input_slots=0 output_slots=2
+.entry task.fast
+PUSHI_BOOL 0
+ST_Q       0
+HALT
+.entry task.slow
+PUSHI_BOOL 0
+ST_Q       1
 HALT
 "#;
 
@@ -237,10 +279,10 @@ fn retain_reject_incompatible_type() {
 
 #[test]
 fn restart_policy_bumpless_holds_q_safe_reset_does_not() {
-    let q_tags = &[("Q0", 0)];
+    let q_tags = &[("Q0", 0), ("Q1", 1)];
     let a = pack(&PackOpts {
         id: "q-a",
-        spasm: Q_TRUE,
+        spasm: Q_BOTH_TRUE,
         tasks: &[("main", "task.main")],
         retain: &[],
         restart: RestartPolicy::SafeReset,
@@ -248,7 +290,7 @@ fn restart_policy_bumpless_holds_q_safe_reset_does_not() {
     });
     let b_bumpless = pack(&PackOpts {
         id: "q-b",
-        spasm: Q_FALSE,
+        spasm: Q_ONLY0_FALSE,
         tasks: &[("main", "task.main")],
         retain: &[],
         restart: RestartPolicy::Bumpless,
@@ -256,16 +298,17 @@ fn restart_policy_bumpless_holds_q_safe_reset_does_not() {
     });
     let b_safe = pack(&PackOpts {
         id: "q-c",
-        spasm: Q_FALSE,
+        spasm: Q_ONLY0_FALSE,
         tasks: &[("main", "task.main")],
         retain: &[],
         restart: RestartPolicy::SafeReset,
         q_tags,
     });
 
-    let (mut rt, sim, clock) = runtime_single(0, 1, 20);
+    let (mut rt, sim, clock) = runtime_single(0, 2, 20);
     load_and_run(&mut rt, &a);
     assert_eq!(sim.last_outputs()[0], plc_io::PlcValue::Bool(true));
+    assert_eq!(sim.last_outputs()[1], plc_io::PlcValue::Bool(true));
 
     let report = rt.upload(&b_bumpless).unwrap();
     assert!(report.bumpless_honored);
@@ -274,26 +317,24 @@ fn restart_policy_bumpless_holds_q_safe_reset_does_not() {
     rt.step().unwrap();
     assert_eq!(
         sim.last_outputs()[0],
-        plc_io::PlcValue::Bool(true),
-        "bumpless holds last %Q through first post-activate invocation"
-    );
-    clock.advance_ms(20);
-    rt.step().unwrap();
-    assert_eq!(
-        sim.last_outputs()[0],
         plc_io::PlcValue::Bool(false),
-        "program drives %Q after first invocation"
+        "bumpless still copies slots this invocation ST_Q'd"
+    );
+    assert_eq!(
+        sim.last_outputs()[1],
+        plc_io::PlcValue::Bool(true),
+        "bumpless holds last %Q for slots the first post-activate invocation did not ST_Q"
     );
 
     // Fresh runtime for safe_reset contrast.
-    let (mut rt, sim, clock) = runtime_single(0, 1, 20);
+    let (mut rt, sim, clock) = runtime_single(0, 2, 20);
     load_and_run(&mut rt, &a);
     rt.upload(&b_safe).unwrap();
     rt.activate().unwrap();
     clock.advance_ms(20);
     rt.step().unwrap();
     assert_eq!(
-        sim.last_outputs()[0],
+        sim.last_outputs()[1],
         plc_io::PlcValue::Bool(false),
         "safe_reset does not hold last %Q"
     );
@@ -412,6 +453,145 @@ fn validation_failure_never_faults() {
     assert_ne!(rt.mode(), OperatingMode::Fault);
     assert_eq!(rt.phase(), ProgramPhase::Idle);
     assert_eq!(rt.engine().current_program_id(), Some("ok"));
+}
+
+#[test]
+fn failed_reupload_keeps_previously_armed_package() {
+    let (mut rt, _sim, _clock) = runtime_single(0, 0, 50);
+    let good = ton_pkg("good");
+    rt.upload(&good).unwrap();
+    assert_eq!(rt.engine().armed_program_id(), Some("good"));
+    assert_eq!(rt.last_arm().unwrap().program_id, "good");
+    assert_eq!(rt.phase(), ProgramPhase::Armed);
+
+    let err = rt.upload(b"not-a-package").unwrap_err();
+    assert!(err.to_string().contains("magic") || err.to_string().contains("package"));
+    assert_eq!(rt.engine().armed_program_id(), Some("good"));
+    assert_eq!(rt.last_arm().unwrap().program_id, "good");
+    assert_eq!(rt.phase(), ProgramPhase::Armed);
+    assert_ne!(rt.mode(), OperatingMode::Fault);
+
+    let retain = &[("Hours", IrType::Dint, 0)];
+    let (mut rt, _sim, _clock) = runtime_single(0, 0, 50);
+    load_and_run(
+        &mut rt,
+        &pack(&PackOpts {
+            id: "ret-a",
+            spasm: RETAIN_WRITE,
+            tasks: &[("main", "task.main")],
+            retain,
+            restart: RestartPolicy::SafeReset,
+            q_tags: &[],
+        }),
+    );
+    rt.upload(&pack(&PackOpts {
+        id: "ret-b",
+        spasm: RETAIN_READ,
+        tasks: &[("main", "task.main")],
+        retain,
+        restart: RestartPolicy::SafeReset,
+        q_tags: &[],
+    }))
+    .unwrap();
+    assert_eq!(rt.engine().armed_program_id(), Some("ret-b"));
+    let err = rt
+        .upload(&pack(&PackOpts {
+            id: "ret-bad",
+            spasm: RETAIN_READ,
+            tasks: &[("main", "task.main")],
+            retain: &[("Hours", IrType::Int, 0)],
+            restart: RestartPolicy::SafeReset,
+            q_tags: &[],
+        }))
+        .unwrap_err();
+    assert!(err.to_string().contains("incompatible"), "{err}");
+    assert_eq!(rt.engine().armed_program_id(), Some("ret-b"));
+    assert_eq!(rt.last_arm().unwrap().program_id, "ret-b");
+    assert_eq!(rt.phase(), ProgramPhase::Armed);
+    assert_eq!(rt.engine().current_program_id(), Some("ret-a"));
+    assert_ne!(rt.mode(), OperatingMode::Fault);
+}
+
+#[test]
+fn bumpless_multi_rate_holds_slow_q_until_slow_runs() {
+    let q_tags = &[("Q0", 0), ("Q1", 1)];
+    let both_true = pack(&PackOpts {
+        id: "mr-a",
+        spasm: MULTI_Q_TRUE,
+        tasks: &[("fast", "task.fast"), ("slow", "task.slow")],
+        retain: &[],
+        restart: RestartPolicy::SafeReset,
+        q_tags,
+    });
+    let both_false = pack(&PackOpts {
+        id: "mr-b",
+        spasm: MULTI_Q_FALSE,
+        tasks: &[("fast", "task.fast"), ("slow", "task.slow")],
+        retain: &[],
+        restart: RestartPolicy::Bumpless,
+        q_tags,
+    });
+
+    let (mut rt, sim, clock) = runtime_multi();
+    rt.upload(&both_true).unwrap();
+    rt.activate().unwrap();
+    rt.engine_mut().request_mode(ModeRequest::Run);
+    rt.run_due().unwrap();
+    clock.advance_ms(500);
+    rt.run_due().unwrap();
+    assert_eq!(sim.last_outputs()[0], plc_io::PlcValue::Bool(true));
+    assert_eq!(sim.last_outputs()[1], plc_io::PlcValue::Bool(true));
+
+    let report = rt.upload(&both_false).unwrap();
+    assert!(report.bumpless_honored);
+    rt.activate().unwrap();
+    clock.advance_ms(20);
+    match rt.step().unwrap() {
+        StepOutcome::Ran { task, .. } => {
+            assert_eq!(rt.engine().plan().tasks[task].name, "fast");
+        }
+        StepOutcome::Idle { .. } => panic!("expected Fast post-activate run, got Idle"),
+    }
+    assert_eq!(
+        sim.last_outputs()[0],
+        plc_io::PlcValue::Bool(false),
+        "Fast may drive its own %Q after Fast FirstScan"
+    );
+    assert_eq!(
+        sim.last_outputs()[1],
+        plc_io::PlcValue::Bool(true),
+        "Slow-owned %Q held until Slow's first post-activate run"
+    );
+
+    let mut fast_held = 0u32;
+    for _ in 0..4 {
+        clock.advance_ms(20);
+        match rt.step().unwrap() {
+            StepOutcome::Ran { task, .. } => {
+                assert_ne!(rt.engine().plan().tasks[task].name, "slow");
+                if task == 0 {
+                    assert!(!rt.engine().epoch_hooks().first_scan(0));
+                    assert!(rt.engine().epoch_hooks().first_scan(1));
+                    assert_eq!(sim.last_outputs()[1], plc_io::PlcValue::Bool(true));
+                    fast_held += 1;
+                }
+            }
+            StepOutcome::Idle { .. } => {}
+        }
+    }
+    assert!(
+        fast_held >= 2,
+        "Fast should run ≥2 times with Slow %Q held: {fast_held}"
+    );
+
+    clock.advance_ms(500);
+    rt.run_due().unwrap();
+    assert_eq!(
+        sim.last_outputs()[1],
+        plc_io::PlcValue::Bool(false),
+        "Slow drives its slot on first post-activate invocation"
+    );
+    assert!(!rt.engine().epoch_hooks().first_scan(1));
 }
 
 #[test]

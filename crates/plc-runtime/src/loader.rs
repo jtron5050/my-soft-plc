@@ -74,6 +74,11 @@ impl Runtime {
     }
 
     /// Mutable scan engine (mode, inject, VM inspection).
+    ///
+    /// Do not call [`ScanEngine::step`] / [`ScanEngine::run_due`] through this
+    /// handle: those skip retain-layout promotion and are unsafe for retain
+    /// policy. After activate, use [`Self::step`] / [`Self::run_due`] so
+    /// `current_layout` tracks buffer A.
     pub fn engine_mut(&mut self) -> &mut ScanEngine {
         &mut self.engine
     }
@@ -98,10 +103,15 @@ impl Runtime {
 
     /// Validate `bytes` and arm buffer B. Failures leave the current program
     /// and mode untouched and **never** enter FAULT.
+    ///
+    /// Only a *successful* upload replaces buffer B (KD-4a rule 5). A failed
+    /// re-upload keeps the previously armed package, `last_arm`, and phase.
     pub fn upload(&mut self, bytes: &[u8]) -> Result<ArmReport, RuntimeError> {
         if self.phase() == ProgramPhase::Swapping {
             return Err(RuntimeError::conflict("upload while swapping"));
         }
+        // Promote layouts if a prior activate completed via `engine_mut().step()`.
+        self.sync_layouts_after_step();
         self.engine
             .epoch_hooks()
             .set_phase(ProgramPhase::Validating);
@@ -109,9 +119,12 @@ impl Runtime {
         match self.arm_validated(bytes) {
             Ok(report) => Ok(report),
             Err(e) => {
-                let _ = self.engine.disarm();
-                self.armed_layout = None;
-                self.last_arm = None;
+                let phase = if self.engine.armed_program_id().is_some() {
+                    ProgramPhase::Armed
+                } else {
+                    ProgramPhase::Idle
+                };
+                self.engine.epoch_hooks().set_phase(phase);
                 Err(e)
             }
         }
@@ -249,9 +262,10 @@ impl Runtime {
     fn sync_layouts_after_step(&mut self) {
         if self.engine.armed_program_id().is_none() {
             if self.engine.current_program_id().is_some() && self.armed_layout.is_some() {
-                // Successful commit: armed became current.
+                // Arm is gone because commit swung B → current; promote that layout.
                 self.current_layout = self.armed_layout.take();
             } else {
+                // Disarm / activate NoOp dropped B without committing it.
                 self.armed_layout = None;
             }
         }

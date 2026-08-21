@@ -217,6 +217,7 @@ pub struct ScanEngine {
     armed: Option<ArmedProgram>,
     current_id: Option<String>,
     current_hash: Option<String>,
+    /// After bumpless activate, copy only `ST_Q` slots until each task's first scan ends.
     bumpless_hold: bool,
     install_min_duration_us: u64,
     activate_deferred_count: u64,
@@ -429,7 +430,7 @@ impl ScanEngine {
     ///
     /// Upload while `swapping` is refused. Validation failures must not call
     /// this — they never FAULT.
-    pub fn arm(&mut self, program: ArmedProgram) -> Result<(), ScanError> {
+    pub fn arm(&mut self, mut program: ArmedProgram) -> Result<(), ScanError> {
         if self.hooks.phase() == ProgramPhase::Swapping {
             return Err(ScanError::invalid_state("arm while swapping"));
         }
@@ -454,6 +455,7 @@ impl ScanEngine {
                 self.io.image.outputs.len()
             )));
         }
+        program.vm.cold_reset_non_retain();
         self.armed = Some(program);
         self.hooks.set_phase(ProgramPhase::Armed);
         self.hooks.set_activate_requested(false);
@@ -587,6 +589,10 @@ impl ScanEngine {
 
     /// KD-4a: join (quiet) is outside the CS; CS starts at the highest-priority
     /// task boundary and is budgeted to `min_task_period`.
+    ///
+    /// Timed work is pointer-swing prep (bounded retain blit). Live `%M`/`%Q` /
+    /// current VM are mutated only after the deadline check so a miss can still
+    /// abort and leave buffer A current. The output driver is not called here.
     fn try_epoch_install(&mut self) -> InstallOutcome {
         if !self.hooks.activate_requested() || self.armed.is_none() {
             return InstallOutcome::Idle;
@@ -604,7 +610,11 @@ impl ScanEngine {
 
         self.hooks.set_phase(ProgramPhase::Swapping);
         let t0 = self.clock.now_ns();
-        let prepare = self.prepare_install();
+        let Some(mut armed) = self.armed.take() else {
+            self.hooks.set_phase(ProgramPhase::Idle);
+            return InstallOutcome::Idle;
+        };
+        let prepare = Self::blit_retain_into(&mut armed, self.vm.as_ref());
         let mut duration_us = self.clock.now_ns().saturating_sub(t0) / 1000;
         if self.install_min_duration_us > duration_us {
             duration_us = self.install_min_duration_us;
@@ -612,19 +622,21 @@ impl ScanEngine {
         let deadline_us = self.min_task_period_us();
 
         if prepare.is_err() {
+            self.armed = Some(armed);
             self.enter_fault();
             self.hooks.set_activate_requested(false);
             self.hooks.set_phase(ProgramPhase::Idle);
             return InstallOutcome::Faulted;
         }
         if duration_us >= deadline_us {
+            self.armed = Some(armed);
             self.hooks.set_phase(ProgramPhase::Armed);
             self.hooks.set_activate_requested(false);
             self.last_activate_deferred = true;
             self.activate_deferred_count = self.activate_deferred_count.saturating_add(1);
             return InstallOutcome::Deferred;
         }
-        self.commit_install();
+        self.commit_install(armed);
         InstallOutcome::Installed
     }
 
@@ -639,30 +651,19 @@ impl ScanEngine {
         u64::from(ms).saturating_mul(1000)
     }
 
-    fn prepare_install(&mut self) -> Result<(), ScanError> {
-        let copies = self
-            .armed
-            .as_ref()
-            .map(|a| a.retain_copies.clone())
-            .unwrap_or_default();
-        let Some(armed) = self.armed.as_mut() else {
+    fn blit_retain_into(armed: &mut ArmedProgram, current: Option<&Vm>) -> Result<(), ScanError> {
+        let Some(cur) = current else {
             return Ok(());
         };
-        armed.vm.cold_reset_non_retain();
-        if let Some(cur) = self.vm.as_ref() {
-            for c in &copies {
-                armed
-                    .vm
-                    .blit_retain_from(c.dst_offset, cur, c.src_offset, c.len)?;
-            }
+        for c in &armed.retain_copies {
+            armed
+                .vm
+                .blit_retain_from(c.dst_offset, cur, c.src_offset, c.len)?;
         }
         Ok(())
     }
 
-    fn commit_install(&mut self) {
-        let Some(armed) = self.armed.take() else {
-            return;
-        };
+    fn commit_install(&mut self, armed: ArmedProgram) {
         let now = self.clock.now_ms();
         let highest = self.schedule_order[0];
         for i in 0..self.tasks.len() {
@@ -689,6 +690,7 @@ impl ScanEngine {
         if policy == OutputRestartPolicy::SafeReset {
             self.apply_safe_reset_outputs();
         }
+        // Driver publish is the following Q phase, not the install CS.
     }
 
     fn cold_init_memory(&mut self) {
@@ -718,7 +720,6 @@ impl ScanEngine {
                 slot.written = true;
             }
         }
-        self.apply_outputs(false);
     }
 
     fn pick_due(&self, now_ms: u64) -> Option<usize> {
@@ -875,12 +876,13 @@ impl ScanEngine {
             self.retain.notify();
             vm.clear_retain_dirty();
         }
-        let hold_q = self.bumpless_hold && self.hooks.first_scan(task);
-        if !hold_q {
-            for i in 0..vm.outputs().len() {
-                if let Ok(v) = vm.outputs().get(i, 0) {
-                    let _ = self.io.image.set_output(i, vm_to_plc(v));
-                }
+        for i in 0..vm.outputs().len() {
+            if self.bumpless_hold && !vm.outputs().written(i) {
+                // Leave last %Q for slots this invocation did not ST_Q.
+                continue;
+            }
+            if let Ok(v) = vm.outputs().get(i, 0) {
+                let _ = self.io.image.set_output(i, vm_to_plc(v));
             }
         }
         Ok(())
