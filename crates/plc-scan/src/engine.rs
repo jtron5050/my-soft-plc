@@ -5,13 +5,14 @@ use std::sync::Arc;
 use plc_config::{DeviceConfig, StopOutputPolicy};
 use plc_io::{
     resolve_effective_output, BadQualityPolicy, DoubleBuffer, EffectiveOutputInput, ForceTable,
-    InputUpdate, IoDriver, OutputImage, ProcessImage,
+    InputUpdate, IoDriver, OutputImage, PlcValue, ProcessImage, TypedSlot,
 };
-use plc_types::{OperatingMode, Quality};
+use plc_types::{OperatingMode, ProgramPhase, Quality};
 use plc_vm::Vm;
 
 use crate::clock::{MonotonicClock, ScanClock};
 use crate::convert::{plc_to_vm, vm_to_plc};
+use crate::epoch::{ActivateRequest, ArmedProgram, InstallOutcome, OutputRestartPolicy};
 use crate::error::ScanError;
 use crate::hooks::EpochHooks;
 use crate::mode::{ModeCell, ModeRequest, ScanHandle};
@@ -213,6 +214,13 @@ pub struct ScanEngine {
     first_run_complete: bool,
     min_duration_us: Vec<u64>,
     last_ran: Option<usize>,
+    armed: Option<ArmedProgram>,
+    current_id: Option<String>,
+    current_hash: Option<String>,
+    bumpless_hold: bool,
+    install_min_duration_us: u64,
+    activate_deferred_count: u64,
+    last_activate_deferred: bool,
 }
 
 impl ScanEngine {
@@ -304,6 +312,13 @@ impl ScanEngine {
             },
             first_run_complete: false,
             last_ran: None,
+            armed: None,
+            current_id: None,
+            current_hash: None,
+            bumpless_hold: false,
+            install_min_duration_us: 0,
+            activate_deferred_count: 0,
+            last_activate_deferred: false,
         })
     }
 
@@ -355,6 +370,10 @@ impl ScanEngine {
             mode_rejected: self.modes.rejected(),
             io_degraded: self.io.module_quality.is_bad(),
             first_run_complete: self.first_run_complete,
+            current_program_id: self.current_id.clone(),
+            armed_program_id: self.armed.as_ref().map(|a| a.program_id.clone()),
+            activate_deferred_count: self.activate_deferred_count,
+            last_activate_deferred: self.last_activate_deferred,
         }
     }
 
@@ -370,10 +389,113 @@ impl ScanEngine {
         self.retain.watch()
     }
 
-    /// Epoch hooks (PR-10).
+    /// Epoch hooks (quiet-point, FirstScan, phase).
     #[must_use]
     pub fn epoch_hooks(&self) -> EpochHooks {
         self.hooks.clone()
+    }
+
+    /// Current program id (after a successful activate).
+    #[must_use]
+    pub fn current_program_id(&self) -> Option<&str> {
+        self.current_id.as_deref()
+    }
+
+    /// Armed buffer B program id, if any.
+    #[must_use]
+    pub fn armed_program_id(&self) -> Option<&str> {
+        self.armed.as_ref().map(|a| a.program_id.as_str())
+    }
+
+    /// Current program `compatibility_hash`.
+    #[must_use]
+    pub fn current_compatibility_hash(&self) -> Option<&str> {
+        self.current_hash.as_deref()
+    }
+
+    /// How many activate attempts were deferred.
+    #[must_use]
+    pub fn activate_deferred_count(&self) -> u64 {
+        self.activate_deferred_count
+    }
+
+    /// Last install attempt ended in `activate_deferred`.
+    #[must_use]
+    pub fn last_activate_deferred(&self) -> bool {
+        self.last_activate_deferred
+    }
+
+    /// Arm buffer B (non-RT). Replaces a previous armed package.
+    ///
+    /// Upload while `swapping` is refused. Validation failures must not call
+    /// this — they never FAULT.
+    pub fn arm(&mut self, program: ArmedProgram) -> Result<(), ScanError> {
+        if self.hooks.phase() == ProgramPhase::Swapping {
+            return Err(ScanError::invalid_state("arm while swapping"));
+        }
+        if program.task_entries.len() != self.plan.tasks.len() {
+            return Err(ScanError::config(format!(
+                "armed task_entries {} != plan tasks {}",
+                program.task_entries.len(),
+                self.plan.tasks.len()
+            )));
+        }
+        if program.vm.inputs().len() != self.io.image.inputs.len() {
+            return Err(ScanError::image_mismatch(format!(
+                "armed VM inputs {} != image inputs {}",
+                program.vm.inputs().len(),
+                self.io.image.inputs.len()
+            )));
+        }
+        if program.vm.outputs().len() != self.io.image.outputs.len() {
+            return Err(ScanError::image_mismatch(format!(
+                "armed VM outputs {} != image outputs {}",
+                program.vm.outputs().len(),
+                self.io.image.outputs.len()
+            )));
+        }
+        self.armed = Some(program);
+        self.hooks.set_phase(ProgramPhase::Armed);
+        self.hooks.set_activate_requested(false);
+        Ok(())
+    }
+
+    /// Drop buffer B. Refused while `swapping`.
+    pub fn disarm(&mut self) -> Result<(), ScanError> {
+        if self.hooks.phase() == ProgramPhase::Swapping {
+            return Err(ScanError::invalid_state("disarm while swapping"));
+        }
+        self.armed = None;
+        self.hooks.set_activate_requested(false);
+        self.hooks.set_phase(ProgramPhase::Idle);
+        Ok(())
+    }
+
+    /// Request an epoch swap at the next highest-priority quiet boundary.
+    ///
+    /// Same `id` + `compatibility_hash` as current is a no-op (drops the arm).
+    pub fn request_activate(&mut self) -> Result<ActivateRequest, ScanError> {
+        if self.hooks.phase() == ProgramPhase::Swapping {
+            return Err(ScanError::invalid_state("activate while swapping"));
+        }
+        let Some(armed) = self.armed.as_ref() else {
+            return Err(ScanError::invalid_state("activate while not armed"));
+        };
+        if self.current_id.as_deref() == Some(armed.program_id.as_str())
+            && self.current_hash.as_deref() == Some(armed.compatibility_hash.as_str())
+        {
+            self.armed = None;
+            self.hooks.set_activate_requested(false);
+            self.hooks.set_phase(ProgramPhase::Idle);
+            return Ok(ActivateRequest::NoOp);
+        }
+        self.hooks.set_activate_requested(true);
+        Ok(ActivateRequest::Pending)
+    }
+
+    /// Inject a minimum install duration for `activate_deferred` tests (`0` clears).
+    pub fn set_install_min_duration_us(&mut self, us: u64) {
+        self.install_min_duration_us = us;
     }
 
     /// Task table.
@@ -421,6 +543,7 @@ impl ScanEngine {
         self.apply_mode_boundary();
         let mut n = 0u32;
         loop {
+            let _ = self.try_epoch_install();
             let now = self.clock.now_ms();
             let Some(task) = self.pick_due(now) else {
                 break;
@@ -434,6 +557,7 @@ impl ScanEngine {
     /// Run the highest-priority due task, or return Idle.
     pub fn step(&mut self) -> Result<StepOutcome, ScanError> {
         self.apply_mode_boundary();
+        let _ = self.try_epoch_install();
         let now = self.clock.now_ms();
         let Some(task) = self.pick_due(now) else {
             return Ok(StepOutcome::Idle {
@@ -445,6 +569,10 @@ impl ScanEngine {
     }
 
     fn apply_mode_boundary(&mut self) {
+        if self.hooks.phase() == ProgramPhase::Swapping {
+            self.modes.reject_pending();
+            return;
+        }
         match self.modes.apply_pending() {
             Ok((_mode, clear_forces)) => {
                 if clear_forces {
@@ -455,6 +583,142 @@ impl ScanEngine {
                 // Counted on the cell; keep running in the current mode.
             }
         }
+    }
+
+    /// KD-4a: join (quiet) is outside the CS; CS starts at the highest-priority
+    /// task boundary and is budgeted to `min_task_period`.
+    fn try_epoch_install(&mut self) -> InstallOutcome {
+        if !self.hooks.activate_requested() || self.armed.is_none() {
+            return InstallOutcome::Idle;
+        }
+        if !self.hooks.is_quiet() {
+            return InstallOutcome::Idle;
+        }
+        let now = self.clock.now_ms();
+        let Some(due) = self.pick_due(now) else {
+            return InstallOutcome::Idle;
+        };
+        if due != self.schedule_order[0] {
+            return InstallOutcome::Idle;
+        }
+
+        self.hooks.set_phase(ProgramPhase::Swapping);
+        let t0 = self.clock.now_ns();
+        let prepare = self.prepare_install();
+        let mut duration_us = self.clock.now_ns().saturating_sub(t0) / 1000;
+        if self.install_min_duration_us > duration_us {
+            duration_us = self.install_min_duration_us;
+        }
+        let deadline_us = self.min_task_period_us();
+
+        if prepare.is_err() {
+            self.enter_fault();
+            self.hooks.set_activate_requested(false);
+            self.hooks.set_phase(ProgramPhase::Idle);
+            return InstallOutcome::Faulted;
+        }
+        if duration_us >= deadline_us {
+            self.hooks.set_phase(ProgramPhase::Armed);
+            self.hooks.set_activate_requested(false);
+            self.last_activate_deferred = true;
+            self.activate_deferred_count = self.activate_deferred_count.saturating_add(1);
+            return InstallOutcome::Deferred;
+        }
+        self.commit_install();
+        InstallOutcome::Installed
+    }
+
+    fn min_task_period_us(&self) -> u64 {
+        let ms = self
+            .plan
+            .tasks
+            .iter()
+            .map(|t| t.period_ms)
+            .min()
+            .unwrap_or(1);
+        u64::from(ms).saturating_mul(1000)
+    }
+
+    fn prepare_install(&mut self) -> Result<(), ScanError> {
+        let copies = self
+            .armed
+            .as_ref()
+            .map(|a| a.retain_copies.clone())
+            .unwrap_or_default();
+        let Some(armed) = self.armed.as_mut() else {
+            return Ok(());
+        };
+        armed.vm.cold_reset_non_retain();
+        if let Some(cur) = self.vm.as_ref() {
+            for c in &copies {
+                armed
+                    .vm
+                    .blit_retain_from(c.dst_offset, cur, c.src_offset, c.len)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn commit_install(&mut self) {
+        let Some(armed) = self.armed.take() else {
+            return;
+        };
+        let now = self.clock.now_ms();
+        let highest = self.schedule_order[0];
+        for i in 0..self.tasks.len() {
+            if i != highest && self.tasks[i].next_due_ms <= now {
+                let period = u64::from(self.plan.tasks[i].period_ms);
+                self.tasks[i].next_due_ms = self.tasks[i].next_due_ms.saturating_add(period);
+            }
+        }
+        let policy = armed.restart_policy;
+        for (i, entry) in armed.task_entries.into_iter().enumerate() {
+            if let Some(task) = self.plan.tasks.get_mut(i) {
+                task.entry = entry;
+            }
+        }
+        self.current_id = Some(armed.program_id);
+        self.current_hash = Some(armed.compatibility_hash);
+        self.bumpless_hold = policy == OutputRestartPolicy::Bumpless;
+        self.vm = Some(armed.vm);
+        self.hooks.set_first_scan_all(true);
+        self.hooks.set_activate_requested(false);
+        self.hooks.set_phase(ProgramPhase::Idle);
+        self.last_activate_deferred = false;
+        self.cold_init_memory();
+        if policy == OutputRestartPolicy::SafeReset {
+            self.apply_safe_reset_outputs();
+        }
+    }
+
+    fn cold_init_memory(&mut self) {
+        for (i, slot) in self.io.image.memory.iter_mut().enumerate() {
+            let ty = self
+                .io
+                .image
+                .memory_meta
+                .get(i)
+                .map_or(plc_io::ValueType::Bool, |m| m.ty);
+            *slot = TypedSlot::zero(ty);
+        }
+    }
+
+    fn apply_safe_reset_outputs(&mut self) {
+        let n_q = self.io.image.outputs.len();
+        for i in 0..n_q {
+            let safe = self
+                .io
+                .image
+                .output_safe
+                .get(i)
+                .copied()
+                .unwrap_or(PlcValue::Bool(false));
+            if let Some(slot) = self.io.image.outputs.get_mut(i) {
+                slot.value = safe;
+                slot.written = true;
+            }
+        }
+        self.apply_outputs(false);
     }
 
     fn pick_due(&self, now_ms: u64) -> Option<usize> {
@@ -525,7 +789,8 @@ impl ScanEngine {
 
         self.hw_wd.stroke();
 
-        if self.hooks.first_scan(task) {
+        // FirstScan clears only after a completed logic invocation (HALT), not STOP ticks.
+        if ran_logic_ok && self.hooks.first_scan(task) {
             self.hooks.clear_first_scan(task);
         }
 
@@ -603,15 +868,19 @@ impl ScanEngine {
         let Some(vm) = self.vm.as_mut() else {
             return Err(ScanError::invalid_state("RUN/SIM with no program armed"));
         };
+        vm.set_first_scan(self.hooks.first_scan(task));
         let entry = self.plan.tasks[task].entry.as_str();
         vm.run_entry(entry, now_ms)?;
         if vm.retain_dirty {
             self.retain.notify();
             vm.clear_retain_dirty();
         }
-        for i in 0..vm.outputs().len() {
-            if let Ok(v) = vm.outputs().get(i, 0) {
-                let _ = self.io.image.set_output(i, vm_to_plc(v));
+        let hold_q = self.bumpless_hold && self.hooks.first_scan(task);
+        if !hold_q {
+            for i in 0..vm.outputs().len() {
+                if let Ok(v) = vm.outputs().get(i, 0) {
+                    let _ = self.io.image.set_output(i, vm_to_plc(v));
+                }
             }
         }
         Ok(())

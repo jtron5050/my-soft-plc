@@ -138,6 +138,31 @@ impl ByteSegment {
     pub fn load_bool_raw(&self, offset: usize) -> bool {
         self.bytes.get(offset).is_some_and(|b| *b != 0)
     }
+
+    /// Copy `len` bytes and type tags from `src` (arm/activate retain blit).
+    pub fn blit_from(
+        &mut self,
+        dst: usize,
+        src: &Self,
+        src_off: usize,
+        len: usize,
+    ) -> Result<(), VmError> {
+        let dst_end = dst.saturating_add(len);
+        let src_end = src_off.saturating_add(len);
+        if dst_end > self.bytes.len() || src_end > src.bytes.len() {
+            return Err(VmError::Bounds {
+                pc: 0,
+                detail: format!(
+                    "blit dst {dst}+{len} (seg {}) src {src_off}+{len} (seg {})",
+                    self.bytes.len(),
+                    src.bytes.len()
+                ),
+            });
+        }
+        self.bytes[dst..dst_end].copy_from_slice(&src.bytes[src_off..src_end]);
+        self.tags[dst..dst_end].copy_from_slice(&src.tags[src_off..src_end]);
+        Ok(())
+    }
 }
 
 /// Typed process image slots for `%I` / `%Q`.

@@ -36,4 +36,12 @@ pub struct ScanStatusSnapshot {
     pub io_degraded: bool,
     /// At least one successful RUN/SIM invocation has completed.
     pub first_run_complete: bool,
+    /// Current program id, if a package has been activated.
+    pub current_program_id: Option<String>,
+    /// Armed (buffer B) program id, if any.
+    pub armed_program_id: Option<String>,
+    /// How many activate attempts were deferred (deadline miss).
+    pub activate_deferred_count: u64,
+    /// Last install attempt ended in `activate_deferred`.
+    pub last_activate_deferred: bool,
 }

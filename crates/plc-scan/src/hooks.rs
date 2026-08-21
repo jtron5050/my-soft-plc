@@ -37,8 +37,8 @@ struct Inner {
 
 /// Quiet-point / FirstScan / phase cell for program-epoch (KD-4a).
 ///
-/// PR-07 never swaps programs. It keeps the API correct so PR-10 can set
-/// FirstScan bits on activate and wait for [`EpochHooks::is_quiet`].
+/// The scan engine waits for [`EpochHooks::is_quiet`] before starting the
+/// activate critical section, and publishes per-task FirstScan bits.
 #[derive(Clone)]
 pub struct EpochHooks {
     inner: Arc<Inner>,

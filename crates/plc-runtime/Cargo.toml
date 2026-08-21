@@ -1,0 +1,28 @@
+[package]
+name = "plc-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Dual-buffer program load, epoch activate, and hot-swap policy glue"
+readme.workspace = true
+
+[dependencies]
+plc-config = { workspace = true }
+plc-fb-primitives = { workspace = true }
+plc-io = { workspace = true }
+plc-ir = { workspace = true }
+plc-package = { workspace = true }
+plc-retain = { workspace = true }
+plc-scan = { workspace = true }
+plc-types = { workspace = true }
+plc-vm = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+plc-io-sim = { workspace = true }
+
+[lints]
+workspace = true
