@@ -49,6 +49,9 @@ program:
 
 auth:
   required: false
+  # dual_control / principals are omitted in SIM; plc-auth treats missing
+  # credentials as anonymous Admin when required is false. Do not put
+  # plaintext bearer tokens here — store SHA-256 hex in principals[].
 
 io:
   fault_on_module_bad: false

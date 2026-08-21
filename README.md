@@ -16,6 +16,7 @@ Rust monorepo (`crates/*`). Current crates:
 |-------|------|
 | [`plc-types`](crates/plc-types) | Shared types, modes, quality plane enums, errors |
 | [`plc-config`](crates/plc-config) | Versioned device config schema, YAML/JSON load, validation |
+| [`plc-auth`](crates/plc-auth) | Roles, bearer/mTLS identity, lockout, rate limit, permission checks |
 | [`plc-io`](crates/plc-io) | Process image, quality, IoDriver trait, double-buffer, force priority |
 | [`plc-io-sim`](crates/plc-io-sim) | Simulation I/O driver |
 | [`plc-ir`](crates/plc-ir) | IR v0.1 types, `spbc` framing, verifier, `spasm` assembler |
@@ -47,4 +48,4 @@ CI runs the same checks on every push and pull request.
 
 ## Status
 
-PR-01–PR-10 are in place (workspace through dual-buffer load / epoch activate). Next: authn/authz primitives (PR-11) per the architecture plan.
+PR-01–PR-11 are in place (workspace through authn/authz primitives). Next: REST API (PR-12) per the architecture plan.

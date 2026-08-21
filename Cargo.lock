@@ -197,6 +197,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "plc-auth"
+version = "0.1.0"
+dependencies = [
+ "plc-config",
+ "plc-types",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "plc-config"
 version = "0.1.0"
 dependencies = [
