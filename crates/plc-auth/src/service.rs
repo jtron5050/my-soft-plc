@@ -66,8 +66,15 @@ impl AuthService {
 
         let mut principals = Vec::with_capacity(auth.principals.len());
         let mut ids = BTreeSet::new();
+        let mut token_hashes = BTreeSet::new();
+        let mut cert_hashes = BTreeSet::new();
         for p in &auth.principals {
-            principals.push(load_principal(p, &mut ids)?);
+            principals.push(load_principal(
+                p,
+                &mut ids,
+                &mut token_hashes,
+                &mut cert_hashes,
+            )?);
         }
 
         Ok(Self {
@@ -154,10 +161,10 @@ impl AuthService {
             .map_err(|retry_after_secs| AuthError::RateLimited { retry_after_secs })
     }
 
-    /// Dual-control helper: may `activator` activate a package armed by `armed_by`?
+    /// Dual-control helper: may `activator` activate a package uploaded by `uploader`?
     #[must_use]
-    pub fn dual_control_ok(&self, armed_by: &str, activator: &str) -> bool {
-        dual_control_allowed(self.dual_control, armed_by, activator)
+    pub fn dual_control_ok(&self, uploader: &str, activator: &str) -> bool {
+        dual_control_allowed(self.dual_control, uploader, activator)
     }
 
     fn verify(&self, cred: &Credential) -> Result<Principal, AuthError> {
@@ -228,6 +235,8 @@ fn should_count_failure(cred: &Credential, required: bool) -> bool {
 fn load_principal(
     p: &PrincipalConfig,
     ids: &mut BTreeSet<String>,
+    token_hashes: &mut BTreeSet<[u8; 32]>,
+    cert_hashes: &mut BTreeSet<[u8; 32]>,
 ) -> Result<StoredPrincipal, AuthError> {
     let id = p.id.trim();
     if id.is_empty() {
@@ -243,6 +252,20 @@ fn load_principal(
         return Err(AuthError::Config(format!(
             "principal '{id}': at least one of token_sha256 or cert_sha256 is required"
         )));
+    }
+    if let Some(h) = token_hash {
+        if !token_hashes.insert(h) {
+            return Err(AuthError::Config(format!(
+                "principal '{id}': duplicate token_sha256"
+            )));
+        }
+    }
+    if let Some(h) = cert_hash {
+        if !cert_hashes.insert(h) {
+            return Err(AuthError::Config(format!(
+                "principal '{id}': duplicate cert_sha256"
+            )));
+        }
     }
     Ok(StoredPrincipal {
         id: id.to_string(),

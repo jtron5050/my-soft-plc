@@ -1,4 +1,4 @@
-//! Audit event types and an in-memory sink. File rotation is PR-18.
+//! Audit event types and an in-memory sink. Persistence and rotation live elsewhere.
 
 use std::collections::VecDeque;
 use std::net::IpAddr;
@@ -30,7 +30,7 @@ pub enum AuditAction {
     UserAdmin,
 }
 
-/// One audit record. `plc-auth` does not persist these; PR-12 records them.
+/// One audit record. `plc-auth` does not persist these.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditEvent {
     /// Wall-clock unix seconds (telemetry timebase; not TON/TOF).
@@ -51,7 +51,7 @@ pub trait AuditSink: Send + Sync {
     fn record(&self, event: AuditEvent);
 }
 
-/// In-memory ring for tests and as a PR-12 stand-in before file rotation.
+/// In-memory ring for tests and as a stand-in before file rotation.
 #[derive(Debug)]
 pub struct MemoryAudit {
     cap: usize,

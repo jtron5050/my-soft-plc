@@ -72,6 +72,28 @@ fn lockout_expires_after_lockout_secs() {
 }
 
 #[test]
+fn lockout_expiry_resets_failure_budget() {
+    let (svc, clock) = service_required();
+    for _ in 0..5 {
+        let _ = svc.authenticate(&Credential::Bearer("bad".into()), LOOPBACK);
+    }
+    clock.advance(Duration::from_secs(60));
+    for i in 0..4 {
+        let err = svc
+            .authenticate(&Credential::Bearer("bad".into()), LOOPBACK)
+            .unwrap_err();
+        assert_eq!(err, AuthError::Unauthenticated, "post-expiry failure {i}");
+    }
+    let err = svc
+        .authenticate(&Credential::Bearer("bad".into()), LOOPBACK)
+        .unwrap_err();
+    assert!(
+        matches!(err, AuthError::Locked { .. }),
+        "expected lock on 5th post-expiry failure, got {err}"
+    );
+}
+
+#[test]
 fn missing_creds_when_required_count_toward_lockout() {
     let (svc, _) = service_required();
     for _ in 0..5 {

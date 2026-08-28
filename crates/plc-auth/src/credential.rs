@@ -13,7 +13,7 @@ pub enum Credential {
     None,
     /// Opaque bearer token (the secret, not the hash).
     Bearer(String),
-    /// Client certificate identity extracted by the TLS terminator (PR-12).
+    /// Client certificate identity extracted by the TLS terminator.
     ClientCert {
         /// SHA-256 of the raw client certificate DER.
         fingerprint_sha256: [u8; 32],

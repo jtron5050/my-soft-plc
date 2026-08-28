@@ -1,4 +1,4 @@
-//! Roles and the permission matrix (PR-12 contract).
+//! Roles and the permission matrix.
 
 use core::fmt;
 

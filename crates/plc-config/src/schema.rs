@@ -29,7 +29,7 @@ pub struct DeviceConfig {
     /// Program package policy.
     #[serde(default)]
     pub program: ProgramConfig,
-    /// Authn/authz hooks (expanded in PR-11).
+    /// Authn/authz configuration (roles, principals, dual control).
     #[serde(default)]
     pub auth: AuthConfig,
     /// I/O subsystem flags (map details live in io-map YAML — PR-03).
@@ -263,8 +263,8 @@ fn default_require_signature() -> bool {
 /// Allowed principal role names in device YAML/JSON (lowercase).
 pub const AUTH_ROLES: &[&str] = &["viewer", "operator", "engineer", "admin"];
 
-/// Authn/authz configuration (PR-11). TLS paths are consumed by the REST
-/// listener (PR-12); this crate only stores them.
+/// Authn/authz configuration. TLS paths are consumed by the REST listener;
+/// this crate only stores them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthConfig {
     /// Require authentication for privileged REST.
@@ -279,8 +279,8 @@ pub struct AuthConfig {
     /// Path to mTLS client CA (optional).
     #[serde(default)]
     pub client_ca_path: String,
-    /// When true, program activate must be a different principal than the one
-    /// that armed the package (upload-by-A / activate-by-B).
+    /// When true, program activate must be a different principal than the
+    /// uploader (upload by A, activate by B).
     #[serde(default)]
     pub dual_control: bool,
     /// Lockout duration in seconds after the failure threshold is hit.

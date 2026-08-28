@@ -1,7 +1,8 @@
 //! Authentication and authorization primitives for the management plane.
 //!
-//! Non-RT. Not used from the scan thread. PR-12 wires this crate into REST;
-//! this crate does not terminate TLS or serve HTTP.
+//! Non-RT. Not used from the scan thread. Does not terminate TLS or serve HTTP;
+//! identity is a SHA-256 bearer hash or client-cert fingerprint, never the
+//! secret itself.
 
 #![forbid(unsafe_code)]
 

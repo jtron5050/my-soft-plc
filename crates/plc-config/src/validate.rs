@@ -136,6 +136,8 @@ fn validate_auth(cfg: &DeviceConfig) -> Result<(), ConfigError> {
     }
 
     let mut ids = std::collections::BTreeSet::new();
+    let mut token_hashes = std::collections::BTreeSet::new();
+    let mut cert_hashes = std::collections::BTreeSet::new();
     for (i, p) in cfg.auth.principals.iter().enumerate() {
         let id = p.id.trim();
         if id.is_empty() {
@@ -148,7 +150,8 @@ fn validate_auth(cfg: &DeviceConfig) -> Result<(), ConfigError> {
                 "auth.principals: duplicate id '{id}'"
             )));
         }
-        if !AUTH_ROLES.contains(&p.role.as_str()) {
+        let role = p.role.trim().to_ascii_lowercase();
+        if !AUTH_ROLES.contains(&role.as_str()) {
             return Err(ConfigError::validation(format!(
                 "auth.principals '{id}': unknown role '{}' (allowed: viewer, operator, engineer, admin)",
                 p.role
@@ -163,9 +166,19 @@ fn validate_auth(cfg: &DeviceConfig) -> Result<(), ConfigError> {
         }
         if let Some(h) = token {
             check_sha256_hex(id, "token_sha256", h)?;
+            if !token_hashes.insert(h.to_ascii_lowercase()) {
+                return Err(ConfigError::validation(format!(
+                    "auth.principals '{id}': duplicate token_sha256"
+                )));
+            }
         }
         if let Some(h) = cert {
             check_sha256_hex(id, "cert_sha256", h)?;
+            if !cert_hashes.insert(h.to_ascii_lowercase()) {
+                return Err(ConfigError::validation(format!(
+                    "auth.principals '{id}': duplicate cert_sha256"
+                )));
+            }
         }
     }
     Ok(())

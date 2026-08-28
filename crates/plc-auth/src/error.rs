@@ -39,7 +39,7 @@ pub enum AuthError {
 }
 
 impl AuthError {
-    /// HTTP status hint for PR-12. No `http` crate dependency.
+    /// HTTP status hint for REST. No `http` crate dependency.
     #[must_use]
     pub const fn http_status(&self) -> u16 {
         match self {
