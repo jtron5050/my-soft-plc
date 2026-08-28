@@ -1,7 +1,7 @@
 //! Semantic validation for [`DeviceConfig`](crate::DeviceConfig).
 
 use crate::error::ConfigError;
-use crate::schema::{DeviceConfig, ProfileKind, CONFIG_SCHEMA_VERSION};
+use crate::schema::{DeviceConfig, ProfileKind, AUTH_ROLES, CONFIG_SCHEMA_VERSION};
 
 /// Allowed I/O driver identifiers for pilot (KD-20).
 const ALLOWED_DRIVERS: &[&str] = &["sim", "gpio", "modbus_tcp"];
@@ -101,12 +101,98 @@ pub fn validate(cfg: DeviceConfig) -> Result<DeviceConfig, ConfigError> {
         return Err(ConfigError::validation("paths.programs must be non-empty"));
     }
 
+    if cfg.limits.auth_fail_per_min == 0 {
+        return Err(ConfigError::validation(
+            "limits.auth_fail_per_min must be >= 1",
+        ));
+    }
+
+    validate_auth(&cfg)?;
+
     // Prod profile soft checks (full refuse-insecure lands in PR-20).
     if cfg.profile == ProfileKind::Prod && !cfg.program.require_signature {
         return Err(ConfigError::validation(
             "profile=prod requires program.require_signature=true",
         ));
     }
+    if cfg.profile == ProfileKind::Prod && !cfg.auth.required {
+        return Err(ConfigError::validation(
+            "profile=prod requires auth.required=true",
+        ));
+    }
 
     Ok(cfg)
+}
+
+fn validate_auth(cfg: &DeviceConfig) -> Result<(), ConfigError> {
+    if cfg.auth.lockout_secs == 0 {
+        return Err(ConfigError::validation("auth.lockout_secs must be >= 1"));
+    }
+
+    if cfg.auth.required && cfg.auth.principals.is_empty() {
+        return Err(ConfigError::validation(
+            "auth.required=true requires at least one principal",
+        ));
+    }
+
+    let mut ids = std::collections::BTreeSet::new();
+    let mut token_hashes = std::collections::BTreeSet::new();
+    let mut cert_hashes = std::collections::BTreeSet::new();
+    for (i, p) in cfg.auth.principals.iter().enumerate() {
+        let id = p.id.trim();
+        if id.is_empty() {
+            return Err(ConfigError::validation(format!(
+                "auth.principals[{i}]: id must be non-empty"
+            )));
+        }
+        if !ids.insert(id) {
+            return Err(ConfigError::validation(format!(
+                "auth.principals: duplicate id '{id}'"
+            )));
+        }
+        let role = p.role.trim().to_ascii_lowercase();
+        if !AUTH_ROLES.contains(&role.as_str()) {
+            return Err(ConfigError::validation(format!(
+                "auth.principals '{id}': unknown role '{}' (allowed: viewer, operator, engineer, admin)",
+                p.role
+            )));
+        }
+        let token = nonempty_hash(p.token_sha256.as_deref());
+        let cert = nonempty_hash(p.cert_sha256.as_deref());
+        if token.is_none() && cert.is_none() {
+            return Err(ConfigError::validation(format!(
+                "auth.principals '{id}': at least one of token_sha256 or cert_sha256 is required"
+            )));
+        }
+        if let Some(h) = token {
+            check_sha256_hex(id, "token_sha256", h)?;
+            if !token_hashes.insert(h.to_ascii_lowercase()) {
+                return Err(ConfigError::validation(format!(
+                    "auth.principals '{id}': duplicate token_sha256"
+                )));
+            }
+        }
+        if let Some(h) = cert {
+            check_sha256_hex(id, "cert_sha256", h)?;
+            if !cert_hashes.insert(h.to_ascii_lowercase()) {
+                return Err(ConfigError::validation(format!(
+                    "auth.principals '{id}': duplicate cert_sha256"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn nonempty_hash(s: Option<&str>) -> Option<&str> {
+    s.map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn check_sha256_hex(id: &str, field: &str, value: &str) -> Result<(), ConfigError> {
+    if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ConfigError::validation(format!(
+            "auth.principals '{id}': {field} must be 64 hex characters"
+        )));
+    }
+    Ok(())
 }

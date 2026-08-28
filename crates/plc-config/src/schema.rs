@@ -29,7 +29,7 @@ pub struct DeviceConfig {
     /// Program package policy.
     #[serde(default)]
     pub program: ProgramConfig,
-    /// Authn/authz hooks (expanded in PR-11).
+    /// Authn/authz configuration (roles, principals, dual control).
     #[serde(default)]
     pub auth: AuthConfig,
     /// I/O subsystem flags (map details live in io-map YAML — PR-03).
@@ -260,7 +260,11 @@ fn default_require_signature() -> bool {
     false
 }
 
-/// Auth configuration (hooks for PR-11).
+/// Allowed principal role names in device YAML/JSON (lowercase).
+pub const AUTH_ROLES: &[&str] = &["viewer", "operator", "engineer", "admin"];
+
+/// Authn/authz configuration. TLS paths are consumed by the REST listener;
+/// this crate only stores them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthConfig {
     /// Require authentication for privileged REST.
@@ -275,6 +279,16 @@ pub struct AuthConfig {
     /// Path to mTLS client CA (optional).
     #[serde(default)]
     pub client_ca_path: String,
+    /// When true, program activate must be a different principal than the
+    /// uploader (upload by A, activate by B).
+    #[serde(default)]
+    pub dual_control: bool,
+    /// Lockout duration in seconds after the failure threshold is hit.
+    #[serde(default = "default_lockout_secs")]
+    pub lockout_secs: u32,
+    /// Pre-provisioned principals (bearer token and/or client-cert hashes).
+    #[serde(default)]
+    pub principals: Vec<PrincipalConfig>,
 }
 
 impl Default for AuthConfig {
@@ -284,8 +298,34 @@ impl Default for AuthConfig {
             tls_cert_path: String::new(),
             tls_key_path: String::new(),
             client_ca_path: String::new(),
+            dual_control: false,
+            lockout_secs: default_lockout_secs(),
+            principals: Vec::new(),
         }
     }
+}
+
+fn default_lockout_secs() -> u32 {
+    60
+}
+
+/// One locally configured principal.
+///
+/// Secrets are never stored: `token_sha256` is SHA-256 of the bearer secret;
+/// `cert_sha256` is SHA-256 of the raw client certificate DER. At least one
+/// identity hash is required.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrincipalConfig {
+    /// Stable principal id (unique within `auth.principals`).
+    pub id: String,
+    /// Role name: `viewer`, `operator`, `engineer`, or `admin`.
+    pub role: String,
+    /// Lowercase hex SHA-256 of the bearer token secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_sha256: Option<String>,
+    /// Lowercase hex SHA-256 of the client certificate DER.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cert_sha256: Option<String>,
 }
 
 /// I/O subsystem flags (driver list / fault policy). Full bindings are in io-map.
