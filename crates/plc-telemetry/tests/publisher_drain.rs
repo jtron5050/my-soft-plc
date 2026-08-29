@@ -22,7 +22,8 @@ fn ddata_uses_alias_and_qos1() {
         MockWallClock::new(42, true),
         ConstMode(OperatingMode::Run),
     );
-    pubr.set_catalog(TagCatalog::from_image_slots(2, 1).unwrap());
+    pubr.set_catalog(TagCatalog::from_image_slots(2, 1).unwrap())
+        .unwrap();
     pubr.prepare_connect();
     pubr.on_connected().unwrap();
 
@@ -66,9 +67,43 @@ telemetry:
     )
     .expect("config");
     let svc = TelemetryService::from_config(&cfg, src, handle).unwrap();
+    let tel_handle = svc.handle();
+    tel_handle.set_catalog(TagCatalog::default());
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
         .unwrap();
     rt.block_on(svc.run()).unwrap();
+}
+
+#[test]
+fn drain_before_birth_does_not_consume_spsc() {
+    let (mut engine, src, _handle, clock) = common::tiny_engine();
+    let peek = engine.telemetry_source();
+    let ids = TopicIds::new("plantA", "softplc-01", "line").unwrap();
+    let mut pubr = Publisher::new(
+        ids,
+        src,
+        RecordingTransport::default(),
+        MockWallClock::new(42, true),
+        ConstMode(OperatingMode::Run),
+    );
+    pubr.set_catalog(TagCatalog::from_image_slots(2, 1).unwrap())
+        .unwrap();
+    pubr.prepare_connect();
+    assert!(!pubr.is_born());
+
+    engine.request_mode(ModeRequest::Run);
+    engine.step().unwrap();
+    clock.advance_ms(50);
+    pubr.drain().unwrap();
+    assert!(
+        peek.try_recv().is_some(),
+        "unborn drain must leave scan SPSC samples in place"
+    );
+    assert!(pubr
+        .transport()
+        .publishes
+        .iter()
+        .all(|f| !f.topic.contains("/DDATA/")));
 }

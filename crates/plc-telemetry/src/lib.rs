@@ -24,7 +24,7 @@ pub use clock::{MockWallClock, SystemWallClock, WallClock};
 pub use error::TelemetryError;
 pub use protobuf::{is_rebirth_command, Metric, MetricValue, Payload, Property};
 pub use publisher::{ConstMode, ModeSource, Publisher};
-pub use service::TelemetryService;
+pub use service::{TelemetryHandle, TelemetryService};
 pub use session::{SessionState, METRIC_BDSEQ, METRIC_DROPS, METRIC_MODE, METRIC_REBIRTH};
 pub use topics::{TopicIds, NAMESPACE};
 pub use transport::{PublishedFrame, RecordingTransport, Transport, SPARKPLUG_QOS};

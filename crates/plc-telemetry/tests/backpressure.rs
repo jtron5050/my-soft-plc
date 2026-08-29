@@ -23,7 +23,8 @@ fn scan_steps_while_mqtt_is_full() {
         MockWallClock::new(1, true),
         ConstMode(OperatingMode::Run),
     );
-    pubr.set_catalog(TagCatalog::from_image_slots(2, 1).unwrap());
+    pubr.set_catalog(TagCatalog::from_image_slots(2, 1).unwrap())
+        .unwrap();
     pubr.prepare_connect();
     pubr.on_connected().unwrap();
     assert!(pubr.mqtt_drops() > 0, "birth should count MQTT drops");

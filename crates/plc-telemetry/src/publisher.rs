@@ -45,7 +45,6 @@ pub struct Publisher<T, C, M> {
     session: SessionState,
     mqtt_drops: u64,
     born: bool,
-    pending_dbirth: bool,
 }
 
 impl<T: Transport, C: WallClock, M: ModeSource> Publisher<T, C, M> {
@@ -60,7 +59,6 @@ impl<T: Transport, C: WallClock, M: ModeSource> Publisher<T, C, M> {
             session: SessionState::new(),
             mqtt_drops: 0,
             born: false,
-            pending_dbirth: false,
         }
     }
 
@@ -92,12 +90,25 @@ impl<T: Transport, C: WallClock, M: ModeSource> Publisher<T, C, M> {
         self.source.drops()
     }
 
-    /// Arm / replace the device metric catalog. Triggers DBIRTH once online.
-    pub fn set_catalog(&mut self, catalog: TagCatalog) {
+    /// Arm / replace the device metric catalog.
+    ///
+    /// While born, a non-empty previous catalog is retired with DDEATH, then
+    /// the new catalog is published as DBIRTH (empty catalog skips DBIRTH).
+    pub fn set_catalog(&mut self, catalog: TagCatalog) -> Result<(), TelemetryError> {
+        if self.born && !self.session.catalog().is_empty() {
+            self.publish_ddeath()?;
+        }
         self.session.set_catalog(catalog);
         if self.born {
-            self.pending_dbirth = true;
+            self.publish_dbirth()?;
         }
+        Ok(())
+    }
+
+    /// True after a successful CONNACK birth sequence.
+    #[must_use]
+    pub fn is_born(&self) -> bool {
+        self.born
     }
 
     /// Increment `bdSeq` (except first session) before CONNECT/Will.
@@ -136,18 +147,15 @@ impl<T: Transport, C: WallClock, M: ModeSource> Publisher<T, C, M> {
         self.publish_nbirth()?;
         self.publish_dbirth()?;
         self.born = true;
-        self.pending_dbirth = false;
         Ok(())
     }
 
     /// Drain the telemetry ring and publish NDATA/DDATA. Never waits on MQTT.
+    /// No-op until [`Self::on_connected`] so the scan SPSC is not consumed
+    /// before CONNACK.
     pub fn drain(&mut self) -> Result<(), TelemetryError> {
         if !self.born {
             return Ok(());
-        }
-        if self.pending_dbirth {
-            self.publish_dbirth()?;
-            self.pending_dbirth = false;
         }
         let mut samples = Vec::new();
         while let Some(s) = self.source.try_recv() {
@@ -197,12 +205,18 @@ impl<T: Transport, C: WallClock, M: ModeSource> Publisher<T, C, M> {
 
     fn publish_dbirth(&mut self) -> Result<(), TelemetryError> {
         let ts = self.clock.unix_ms();
-        let q = publish_quality(Quality::Good, self.clock.is_synchronized());
-        if let Some(payload) = self.session.dbirth(ts, q) {
+        if let Some(payload) = self.session.dbirth(ts, self.clock.is_synchronized()) {
             let topic = self.ids.dbirth();
             self.send(&topic, &payload)?;
         }
         Ok(())
+    }
+
+    fn publish_ddeath(&mut self) -> Result<(), TelemetryError> {
+        let ts = self.clock.unix_ms();
+        let payload = self.session.ddeath(ts);
+        let topic = self.ids.ddeath();
+        self.send(&topic, &payload)
     }
 
     fn try_send_sub(&mut self) -> Result<(), TelemetryError> {

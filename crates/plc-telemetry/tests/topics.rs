@@ -14,6 +14,17 @@ fn n_verbs_have_four_tokens() {
 #[test]
 fn d_verbs_have_five_tokens() {
     let ids = TopicIds::new("plantA", "softplc-01", "line").unwrap();
-    assert_eq!(ids.ddata().split('/').count(), 5);
-    assert!(ids.ddata().ends_with("/line"));
+    for t in [ids.dbirth(), ids.ddata(), ids.ddeath()] {
+        assert_eq!(t.split('/').count(), 5, "{t}");
+        assert!(t.ends_with("/line"), "{t}");
+    }
+}
+
+#[test]
+fn plus_and_hash_are_rejected_and_ids_are_trimmed() {
+    assert!(TopicIds::new("g+", "e", "d").is_err());
+    assert!(TopicIds::new("g", "e#", "d").is_err());
+    assert!(TopicIds::new("#", "e", "d").is_err());
+    let ids = TopicIds::new(" plantA ", " softplc-01 ", " line ").unwrap();
+    assert_eq!(ids.ncmd(), "spBv1.0/plantA/NCMD/softplc-01");
 }

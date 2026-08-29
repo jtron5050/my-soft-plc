@@ -45,3 +45,27 @@ fn ddata_omits_name() {
     assert_eq!(p.metrics[0].alias, Some(1));
     let _ = Payload::default();
 }
+
+#[test]
+fn dbirth_uses_cached_live_value() {
+    let mut s = SessionState::new();
+    s.set_catalog(TagCatalog::from_image_slots(1, 0).unwrap());
+    let before = s.dbirth(1, true).unwrap();
+    assert_eq!(before.metrics[0].value, Some(MetricValue::Bool(false)));
+    let sample = TelemetrySample {
+        alias: 0,
+        tag_hint: 0,
+        value: PlcValue::Bool(true),
+        quality: Quality::Good,
+        forced: true,
+        now_ms: 0,
+        is_input: true,
+    };
+    assert!(s.ddata(2, &[sample], true).is_some());
+    let after = s.dbirth(3, true).unwrap();
+    assert_eq!(after.metrics[0].value, Some(MetricValue::Bool(true)));
+    assert!(after.metrics[0]
+        .properties
+        .iter()
+        .any(|p| p.key == "Forced" && p.value == MetricValue::Bool(true)));
+}

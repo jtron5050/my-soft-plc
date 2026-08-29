@@ -23,32 +23,11 @@ impl TopicIds {
         edge_node_id: impl Into<String>,
         device_id: impl Into<String>,
     ) -> Result<Self, TelemetryError> {
-        let ids = Self {
-            group_id: group_id.into(),
-            edge_node_id: edge_node_id.into(),
-            device_id: device_id.into(),
-        };
-        if ids.group_id.trim().is_empty() {
-            return Err(TelemetryError::config("group_id must be non-empty"));
-        }
-        if ids.edge_node_id.trim().is_empty() {
-            return Err(TelemetryError::config("edge_node_id must be non-empty"));
-        }
-        if ids.device_id.trim().is_empty() {
-            return Err(TelemetryError::config("device_id must be non-empty"));
-        }
-        for (label, value) in [
-            ("group_id", ids.group_id.as_str()),
-            ("edge_node_id", ids.edge_node_id.as_str()),
-            ("device_id", ids.device_id.as_str()),
-        ] {
-            if value.contains('/') {
-                return Err(TelemetryError::config(format!(
-                    "{label} must not contain '/'"
-                )));
-            }
-        }
-        Ok(ids)
+        Ok(Self {
+            group_id: parse_id("group_id", group_id)?,
+            edge_node_id: parse_id("edge_node_id", edge_node_id)?,
+            device_id: parse_id("device_id", device_id)?,
+        })
     }
 
     fn node(&self, verb: &str) -> String {
@@ -98,11 +77,31 @@ impl TopicIds {
         self.device("DDATA")
     }
 
+    /// `spBv1.0/{group}/DDEATH/{edge}/{device}`.
+    #[must_use]
+    pub fn ddeath(&self) -> String {
+        self.device("DDEATH")
+    }
+
     /// True when `topic` is this node's NCMD topic.
     #[must_use]
     pub fn is_ncmd(&self, topic: &str) -> bool {
         topic == self.ncmd()
     }
+}
+
+/// Sparkplug 3.0 forbids `/`, `+`, and `#` in identity tokens (MQTT wildcards).
+fn parse_id(label: &str, raw: impl Into<String>) -> Result<String, TelemetryError> {
+    let trimmed = raw.into().trim().to_string();
+    if trimmed.is_empty() {
+        return Err(TelemetryError::config(format!("{label} must be non-empty")));
+    }
+    if trimmed.contains('/') || trimmed.contains('+') || trimmed.contains('#') {
+        return Err(TelemetryError::config(format!(
+            "{label} must not contain '/', '+', or '#'"
+        )));
+    }
+    Ok(trimmed)
 }
 
 #[cfg(test)]
@@ -127,10 +126,26 @@ mod tests {
         let t = ids();
         assert_eq!(t.dbirth(), "spBv1.0/plantA/DBIRTH/softplc-01/line");
         assert_eq!(t.ddata(), "spBv1.0/plantA/DDATA/softplc-01/line");
+        assert_eq!(t.ddeath(), "spBv1.0/plantA/DDEATH/softplc-01/line");
     }
 
     #[test]
-    fn slash_in_id_is_rejected() {
+    fn slash_plus_hash_in_id_are_rejected() {
         assert!(TopicIds::new("a/b", "n", "d").is_err());
+        assert!(TopicIds::new("a+b", "n", "d").is_err());
+        assert!(TopicIds::new("a", "n#x", "d").is_err());
+        assert!(TopicIds::new("#", "n", "d").is_err());
+        assert!(TopicIds::new("+", "n", "d").is_err());
+        assert!(TopicIds::new("a", "n", "d+").is_err());
+    }
+
+    #[test]
+    fn new_trims_identity_tokens() {
+        let t = TopicIds::new(" plantA ", " softplc-01 ", " line ").unwrap();
+        assert_eq!(t.group_id, "plantA");
+        assert_eq!(t.edge_node_id, "softplc-01");
+        assert_eq!(t.device_id, "line");
+        assert_eq!(t.ncmd(), "spBv1.0/plantA/NCMD/softplc-01");
+        assert!(TopicIds::new("  ", "n", "d").is_err());
     }
 }

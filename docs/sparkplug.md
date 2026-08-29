@@ -36,13 +36,15 @@ Namespace: `spBv1.0`.
 | NCMD | `spBv1.0/{group}/NCMD/{edge}` |
 | DBIRTH | `spBv1.0/{group}/DBIRTH/{edge}/{device}` |
 | DDATA | `spBv1.0/{group}/DDATA/{edge}/{device}` |
+| DDEATH | `spBv1.0/{group}/DDEATH/{edge}/{device}` |
 
 The architecture one-liner `spBv1.0/plantA/NDATA/softplc-01/line` is
 **token-order illustration**. NDATA must **not** include `device_id`
 (Sparkplug: device id is only legal on D* verbs). Host tools (Ignition,
 Node-RED) expect the table above.
 
-IDs must not contain `/`.
+IDs are trimmed. They must be non-empty and must not contain `/`, `+`, or
+`#` (MQTT wildcard / topic-separator characters).
 
 ## MQTT 5 session
 
@@ -53,17 +55,22 @@ IDs must not contain `/`.
 | Keep-alive | `30` s |
 | Client id | `device.id` |
 | Broker URL | `telemetry.broker_url` (`mqtt://` or `mqtts://`) |
-| QoS | **1** on NBIRTH/NDATA/NDEATH/DBIRTH/DDATA/NCMD (including Will) |
+| QoS | **1** on NBIRTH/NDATA/NDEATH/DBIRTH/DDATA/DDEATH/NCMD (including Will) |
 | Retain | `false` (no STATE) |
 
 **QoS note:** Eclipse Sparkplug TCK wants QoS 0 for non-STATE messages. This
 product's frozen contract is QoS 1. Follow this document.
 
 If rumqttc auto-reconnects without a new CONNECT, the Will `bdSeq` may lag the
-in-memory counter. `TelemetryService::run` rebuilds the client (new Will) when
-the event loop returns an error. On `SessionStateMismatch` after a process
-restart while the broker still holds the 3600 s session, recreate the event
-loop and treat it as a new Sparkplug session (`bdSeq++`).
+in-memory counter. `TelemetryService::run` waits for a successful
+`Incoming::ConnAck` before NCMD subscribe / NBIRTH / DBIRTH (`born` stays
+false so `drain` does not consume the scan SPSC). Any `eventloop.poll()`
+`Err` rebuilds the client with a new Will. `bdSeq` increments only when that
+error follows a session that already reached CONNACK — a failed poll before
+the first CONNACK retries the same `bdSeq`. rumqttc 0.25 has no
+`SessionStateMismatch` error; CONNACK exposes `session_present`, which is
+not used to bump `bdSeq`. Sparkplug birth still runs on every successful
+CONNACK.
 
 TLS: `mqtts://` uses rumqttc's rustls default (native roots). No extra YAML
 keys in PR-13.
@@ -84,11 +91,18 @@ Node DATA metrics include **names** (few of them).
 **Device** (DBIRTH / DDATA): process-image tags from `TagCatalog`.
 
 - Aliases: sort metric **names** lexicographically; assign `u32` starting at **1**.
-- DBIRTH: `name` + `alias` + `datatype` + default value + properties.
+- DBIRTH: `name` + `alias` + `datatype` + last-seen live value + properties.
+  Falls back to the type default (BOOL false / numeric 0) only before any
+  sample for that slot. `Forced=true` is included when the last sample had
+  a force overlay.
 - DDATA: **alias only** (no name) + live value + properties.
 - Unknown `(is_input, tag_hint)` samples are dropped.
-- Empty catalog → no DBIRTH/DDATA until `TelemetryService::set_catalog`
-  (PR-14 maps `TagEntry` + io-map `unit` after activate).
+- Empty catalog → no DBIRTH/DDATA until `TelemetryService::set_catalog` or
+  `TelemetryHandle::set_catalog` (PR-14 maps `TagEntry` + io-map `unit`
+  after activate). Clone `TelemetryService::handle` before spawning `run`;
+  `run` consumes the service value. Replacing a non-empty catalog while
+  born publishes DDEATH for the old device metric set, then DBIRTH for the
+  new catalog.
 
 `TagCatalog::from_image_slots` names tags `I{n}` / `Q{n}` for tests / pre-arm.
 

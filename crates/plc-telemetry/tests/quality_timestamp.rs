@@ -28,7 +28,8 @@ fn unsynced_clock_marks_uncertain() {
             unit: String::new(),
         }])
         .unwrap(),
-    );
+    )
+    .unwrap();
     pubr.prepare_connect();
     pubr.on_connected().unwrap();
     let nbirth = &pubr.transport().publishes[0];
