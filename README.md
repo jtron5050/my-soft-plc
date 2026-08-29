@@ -27,8 +27,9 @@ Rust monorepo (`crates/*`). Current crates:
 | [`plc-package`](crates/plc-package) | `.spkg` v1 container, JSON/JCS manifest, Ed25519 verify |
 | [`plc-runtime`](crates/plc-runtime) | Dual-buffer load, epoch activate, hot-swap policy glue |
 | [`plc-api`](crates/plc-api) | REST config/status API (axum + tokio), OpenAPI at [`docs/openapi/openapi.yaml`](docs/openapi/openapi.yaml) |
+| [`plc-telemetry`](crates/plc-telemetry) | MQTT 5 Sparkplug B 3.0 publisher (non-RT) |
 
-Further crates (`plc-telemetry`, …) land in later PRs per the architecture plan.
+Sparkplug contract: [`docs/sparkplug.md`](docs/sparkplug.md).
 
 Sample programs (text-reviewable `fixture.spasm`): under [`samples/programs/`](samples/programs/).
 
@@ -49,4 +50,4 @@ CI runs the same checks on every push and pull request.
 
 ## Status
 
-PR-01–PR-12 are in place (workspace through REST API). Next: MQTT Sparkplug B telemetry (PR-13) per the architecture plan.
+PR-01–PR-12 are in place (workspace through REST API). This branch adds MQTT Sparkplug B telemetry (PR-13).
