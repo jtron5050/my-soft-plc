@@ -1,0 +1,509 @@
+openapi: 3.0.3
+info:
+  title: Soft PLC REST API
+  version: 0.1.0
+  description: |
+    Configuration and status API (`https://<device>:8443/api/v1`).
+    Not for high-rate process data (use MQTT Sparkplug). Frozen for PR-12.
+  license:
+    name: Apache-2.0
+servers:
+  - url: https://localhost:8443
+security:
+  - bearerAuth: []
+paths:
+  /api/v1/health:
+    get:
+      summary: Liveness
+      security: []
+      responses:
+        "200":
+          description: Process is serving
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /api/v1/status:
+    get:
+      summary: Mode, program phase, scan stats
+      responses:
+        "200":
+          description: Status snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Status"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/status/tasks:
+    get:
+      summary: Per-task timing
+      responses:
+        "200":
+          description: Task table
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scan"
+  /api/v1/status/io:
+    get:
+      summary: Driver / module quality summary
+      responses:
+        "200":
+          description: I/O summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IoStatus"
+  /api/v1/config:
+    get:
+      summary: Non-secret device config
+      responses:
+        "200":
+          description: DeviceConfig JSON
+    put:
+      summary: Replace config (requires STOP)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigWrite"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    patch:
+      summary: RFC 7396 merge-patch (requires STOP)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfigWrite"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/programs:
+    get:
+      summary: Stored programs
+      responses:
+        "200":
+          description: List
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StoredProgram"
+    post:
+      summary: Upload .spkg (store only; 8 MiB, 1 concurrent, 60 s)
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: Stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoredProgram"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /api/v1/programs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ProgramId"
+    get:
+      summary: Metadata + retain report if armed
+      responses:
+        "200":
+          description: Detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProgramDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Remove inactive (not current/armed)
+      responses:
+        "204":
+          description: Deleted
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/programs/{id}/arm:
+    parameters:
+      - $ref: "#/components/parameters/ProgramId"
+    post:
+      summary: Validate and arm (sync; idempotent if same id+hash)
+      responses:
+        "200":
+          description: Armed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProgramDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/programs/{id}/activate:
+    parameters:
+      - $ref: "#/components/parameters/ProgramId"
+      - name: wait_ms
+        in: query
+        schema:
+          type: integer
+          minimum: 0
+    post:
+      summary: Request epoch swap (202 pending; 200 no-op or wait complete)
+      responses:
+        "200":
+          description: No-op or wait completed
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivateAccepted"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/mode:
+    post:
+      summary: Request STOP / RUN / SIM / FAULT_RESET
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModeRequest"
+      responses:
+        "200":
+          description: Queued
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/tags:
+    get:
+      summary: Tag dictionary
+      responses:
+        "200":
+          description: Names
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagList"
+  /api/v1/tags/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Percent-encode `/` in tag paths
+    get:
+      summary: Debug read
+      responses:
+        "200":
+          description: Value
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagRead"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      summary: Force write (%Q only; max 100/min)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TagWrite"
+      responses:
+        "200":
+          description: Forced
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /api/v1/metrics:
+    get:
+      summary: Prometheus text
+      responses:
+        "200":
+          description: Exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+  /api/v1/diagnostics/events:
+    get:
+      summary: In-memory event ring (4096)
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Events
+  /api/v1/diagnostics/audit:
+    get:
+      summary: Audit export (in-memory; file rotation is PR-18)
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Audit rows
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Opaque bearer token. Optional mTLS client certificate (SHA-256 of DER).
+  parameters:
+    ProgramId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 100
+        maximum: 1000
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: integer
+        format: int64
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+    Status:
+      type: object
+      required: [mode, program, scan, watchdog, io, uptime_s]
+      properties:
+        mode:
+          type: string
+          enum: [STOP, RUN, FAULT, SIM]
+        program:
+          $ref: "#/components/schemas/ProgramStatus"
+        scan:
+          $ref: "#/components/schemas/Scan"
+        watchdog:
+          type: string
+          enum: [ok, fault]
+        io:
+          $ref: "#/components/schemas/IoStatus"
+        uptime_s:
+          type: integer
+          format: int64
+    ProgramStatus:
+      type: object
+      required: [phase]
+      properties:
+        phase:
+          type: string
+          enum: [idle, validating, armed, swapping]
+        current:
+          $ref: "#/components/schemas/ProgramCurrent"
+        armed:
+          $ref: "#/components/schemas/ProgramArmed"
+    ProgramCurrent:
+      type: object
+      properties:
+        id: { type: string }
+        version: { type: string }
+        build_id: { type: string }
+        compatibility_hash: { type: string }
+        signed: { type: boolean }
+    ProgramArmed:
+      type: object
+      properties:
+        id: { type: string }
+        version: { type: string }
+        build_id: { type: string }
+        compatibility_hash: { type: string }
+        restart_policy:
+          type: string
+          enum: [safe_reset, bumpless]
+        bumpless_eligible: { type: boolean }
+    Scan:
+      type: object
+      required: [tasks]
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskTiming"
+    TaskTiming:
+      type: object
+      properties:
+        name: { type: string }
+        period_ms: { type: integer }
+        last_us: { type: integer }
+        max_us: { type: integer }
+        overruns: { type: integer }
+    IoStatus:
+      type: object
+      properties:
+        degraded: { type: boolean }
+        modules_bad:
+          type: array
+          items: { type: string }
+    StoredProgram:
+      type: object
+      properties:
+        id: { type: string }
+        version: { type: string }
+        build_id: { type: string }
+        compatibility_hash: { type: string }
+        size: { type: integer }
+        uploader: { type: string }
+        stored_at: { type: integer }
+    ProgramDetail:
+      allOf:
+        - $ref: "#/components/schemas/StoredProgram"
+        - type: object
+          properties:
+            retain:
+              type: object
+              properties:
+                kept: { type: integer }
+                cold_defaults: { type: integer }
+                dropped: { type: integer }
+                zeroed_incompat:
+                  type: array
+                  items: { type: string }
+    ActivateAccepted:
+      type: object
+      required: [job_id, status]
+      properties:
+        job_id: { type: string }
+        status:
+          type: string
+          enum: [pending]
+    ModeRequest:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [RUN, STOP, FAULT_RESET, SIM]
+          description: FAULT is not a legal request (engine enters FAULT itself)
+    TagList:
+      type: object
+      properties:
+        tags:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              type: { type: string }
+              kind: { type: string }
+              slot: { type: integer }
+    TagRead:
+      type: object
+      properties:
+        name: { type: string }
+        type: { type: string }
+        kind: { type: string }
+        value: {}
+        quality: { type: string }
+        forced: { type: boolean }
+    TagWrite:
+      type: object
+      required: [value]
+      properties:
+        value: {}
+    ConfigWrite:
+      type: object
+      properties:
+        restart_required: { type: boolean }
+    Error:
+      type: object
+      required: [error, message, code]
+      properties:
+        error: { type: string }
+        message: { type: string }
+        code: { type: string }
+  responses:
+    Unauthenticated:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Role or dual-control refused
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Validation failure (does not enter FAULT)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Unknown program or tag
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Phase / mode / current-program conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    TooLarge:
+      description: Upload exceeds 8 MiB
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: Concurrent upload, REST rate, lockout, or force cap
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

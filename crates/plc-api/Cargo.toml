@@ -1,0 +1,55 @@
+[package]
+name = "plc-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "REST API for configuration and status (architecture PR-12)"
+readme.workspace = true
+
+[dependencies]
+plc-auth = { workspace = true }
+plc-config = { workspace = true }
+plc-io = { workspace = true }
+plc-package = { workspace = true }
+plc-runtime = { workspace = true }
+plc-scan = { workspace = true }
+plc-types = { workspace = true }
+axum = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+tower = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+http-body-util = { workspace = true }
+plc-auth = { workspace = true }
+plc-config = { workspace = true }
+plc-io = { workspace = true }
+plc-io-sim = { workspace = true }
+plc-ir = { workspace = true }
+plc-package = { workspace = true }
+plc-runtime = { workspace = true }
+plc-scan = { workspace = true }
+plc-types = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

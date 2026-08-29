@@ -26,8 +26,9 @@ Rust monorepo (`crates/*`). Current crates:
 | [`plc-retain`](crates/plc-retain) | Symbolic retain map, A/B NV store, T5 flush API |
 | [`plc-package`](crates/plc-package) | `.spkg` v1 container, JSON/JCS manifest, Ed25519 verify |
 | [`plc-runtime`](crates/plc-runtime) | Dual-buffer load, epoch activate, hot-swap policy glue |
+| [`plc-api`](crates/plc-api) | REST config/status API (axum + tokio), OpenAPI at [`docs/openapi/openapi.yaml`](docs/openapi/openapi.yaml) |
 
-Further crates (`plc-api`, `plc-telemetry`, …) land in later PRs per the architecture plan.
+Further crates (`plc-telemetry`, …) land in later PRs per the architecture plan.
 
 Sample programs (text-reviewable `fixture.spasm`): under [`samples/programs/`](samples/programs/).
 
@@ -48,4 +49,4 @@ CI runs the same checks on every push and pull request.
 
 ## Status
 
-PR-01–PR-11 are in place (workspace through authn/authz primitives). Next: REST API (PR-12) per the architecture plan.
+PR-01–PR-12 are in place (workspace through REST API). Next: MQTT Sparkplug B telemetry (PR-13) per the architecture plan.

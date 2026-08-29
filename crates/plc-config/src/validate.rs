@@ -101,6 +101,13 @@ pub fn validate(cfg: DeviceConfig) -> Result<DeviceConfig, ConfigError> {
         return Err(ConfigError::validation("paths.programs must be non-empty"));
     }
 
+    if cfg.rest.bind.parse::<std::net::SocketAddr>().is_err() {
+        return Err(ConfigError::validation(format!(
+            "rest.bind '{}' is not a host:port socket address",
+            cfg.rest.bind
+        )));
+    }
+
     if cfg.limits.auth_fail_per_min == 0 {
         return Err(ConfigError::validation(
             "limits.auth_fail_per_min must be >= 1",

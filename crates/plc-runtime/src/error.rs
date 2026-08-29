@@ -31,6 +31,12 @@ pub enum RuntimeError {
     /// Semantic arm failure (missing task, ABI, …).
     #[error("arm: {0}")]
     Arm(String),
+    /// Named resource is not in the current/armed dictionary or image.
+    #[error("not found: {0}")]
+    NotFound(String),
+    /// Tag type or force target refused.
+    #[error("bad request: {0}")]
+    BadRequest(String),
 }
 
 impl RuntimeError {
@@ -43,6 +49,14 @@ impl RuntimeError {
     pub(crate) fn arm(msg: impl Into<String>) -> Self {
         Self::Arm(msg.into())
     }
+
+    pub(crate) fn not_found(msg: impl Into<String>) -> Self {
+        Self::NotFound(msg.into())
+    }
+
+    pub(crate) fn bad_request(msg: impl Into<String>) -> Self {
+        Self::BadRequest(msg.into())
+    }
 }
 
 impl From<RuntimeError> for PlcError {
@@ -54,6 +68,7 @@ impl From<RuntimeError> for PlcError {
             RuntimeError::Vm(e) => Self::Scan(e.to_string()),
             RuntimeError::Conflict { context } => Self::InvalidState { context },
             RuntimeError::Arm(msg) => Self::Package(msg),
+            RuntimeError::NotFound(msg) | RuntimeError::BadRequest(msg) => Self::Scan(msg),
         }
     }
 }

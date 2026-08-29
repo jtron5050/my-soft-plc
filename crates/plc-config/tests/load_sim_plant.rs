@@ -27,6 +27,7 @@ fn load_sim_plant_yaml() {
     assert!(!cfg.auth.dual_control);
     assert_eq!(cfg.auth.lockout_secs, 60);
     assert!(cfg.auth.principals.is_empty());
+    assert_eq!(cfg.rest.bind, "127.0.0.1:8443");
 }
 
 #[test]
@@ -289,6 +290,24 @@ auth:
     assert!(cfg.auth.dual_control);
     assert_eq!(cfg.auth.principals.len(), 1);
     assert_eq!(cfg.auth.principals[0].id, "eng");
+}
+
+#[test]
+fn reject_bad_rest_bind() {
+    let yaml = r#"
+version: 1
+device:
+  id: x
+scan:
+  tasks:
+    - name: main
+      period_ms: 50
+      entry: task.main
+rest:
+  bind: "not-an-addr"
+"#;
+    let err = load_from_str(yaml, ConfigFormat::Yaml).unwrap_err();
+    assert!(err.to_string().contains("rest.bind"));
 }
 
 #[test]
