@@ -20,6 +20,7 @@ use plc_ir::{assemble, IrType};
 use plc_package::{IrTypeName, Manifest, PackageBuilder, RestartPolicy, TagEntry, TagKind};
 use plc_runtime::{Runtime, RuntimeConfig};
 use plc_scan::{MonotonicClock, ScanPlan};
+use plc_types::OperatingMode;
 use tower::ServiceExt;
 
 pub const VIEWER: &str = "viewer-secret";
@@ -132,6 +133,60 @@ pub fn app_auth() -> (Router, AppState) {
 pub fn app_dual() -> (Router, AppState) {
     let (state, _) = make_state(true, true);
     (router(state.clone()), state)
+}
+
+pub fn step_until_mode(state: &AppState, want: OperatingMode) {
+    {
+        let mut rt = state.runtime.lock().unwrap();
+        for _ in 0..20 {
+            let _ = rt.step();
+            if state.scan_handle.mode() == want {
+                return;
+            }
+        }
+    }
+    panic!(
+        "mode did not become {want:?}, got {:?}",
+        state.scan_handle.mode()
+    );
+}
+
+/// Upload, arm, activate `line`, request RUN, and step until observed RUN.
+pub async fn bring_up_run(app: Router, state: &AppState) {
+    let (status, body) = send(
+        app.clone(),
+        post_bytes("/api/v1/programs", Some(ENGINEER), pack_line()),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let (status, body) = send(
+        app.clone(),
+        post_json("/api/v1/programs/line/arm", Some(ENGINEER), ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let (status, body) = send(
+        app.clone(),
+        post_json("/api/v1/programs/line/activate", Some(ENGINEER), ""),
+    )
+    .await;
+    assert!(
+        status == StatusCode::ACCEPTED || status == StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let (status, _) = send(
+        app,
+        post_json("/api/v1/mode", Some(OPERATOR), r#"{"mode":"RUN"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    step_until_mode(state, OperatingMode::Run);
 }
 
 pub fn pack_line() -> Vec<u8> {

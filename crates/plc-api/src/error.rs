@@ -137,6 +137,10 @@ impl From<RuntimeError> for ApiError {
             RuntimeError::Conflict { context } => {
                 let code = if context.contains("swapping") {
                     "phase_swapping"
+                } else if context.contains("validating") {
+                    "phase_validating"
+                } else if context.contains("activate") {
+                    "activate_pending"
                 } else if context.contains("not armed") {
                     "not_armed"
                 } else {

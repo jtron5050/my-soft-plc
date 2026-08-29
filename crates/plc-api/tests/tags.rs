@@ -53,6 +53,7 @@ async fn tags_and_force() {
     assert_eq!(status, StatusCode::OK);
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["forced"], true);
+    assert_eq!(v["value"], true);
 
     let (status, _) = send(
         app,

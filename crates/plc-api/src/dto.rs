@@ -231,7 +231,7 @@ pub struct TagWriteResponse {
 /// Config write result.
 #[derive(Debug, Serialize)]
 pub struct ConfigWriteResponse {
-    /// Whether scan/io changes need a process restart.
+    /// Whether scan/io/bind/TLS/body-limit changes need a process restart.
     pub restart_required: bool,
 }
 

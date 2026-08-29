@@ -105,7 +105,7 @@ pub struct TagView {
     pub ty: IrType,
     /// Image region.
     pub kind: TagKind,
-    /// Current value (image slot).
+    /// Current value (`%Q` uses the force overlay when present).
     pub value: PlcValue,
     /// Slot quality.
     pub quality: Quality,
@@ -220,15 +220,21 @@ impl Runtime {
         }
     }
 
-    /// Principal id recorded at last successful arm (dual control).
+    /// Principal id of the last stored package (dual control: upload by A).
     #[must_use]
     pub fn last_uploader(&self) -> Option<&str> {
         self.last_uploader.as_deref()
     }
 
-    /// Record who armed buffer B.
+    /// Record the package uploader (not the armer).
     pub fn set_uploader(&mut self, principal_id: impl Into<String>) {
         self.last_uploader = Some(principal_id.into());
+    }
+
+    /// True after [`Self::activate`] until the scan thread finishes the swap.
+    #[must_use]
+    pub fn activate_requested(&self) -> bool {
+        self.engine.epoch_hooks().activate_requested()
     }
 
     /// Arm policy used by [`Self::prepare_arm`].
@@ -265,6 +271,9 @@ impl Runtime {
         if self.phase() == ProgramPhase::Swapping {
             return Err(RuntimeError::conflict("upload while swapping"));
         }
+        if self.activate_requested() {
+            return Err(RuntimeError::conflict("upload while activate pending"));
+        }
         self.sync_layouts_after_step();
         self.engine
             .epoch_hooks()
@@ -284,7 +293,12 @@ impl Runtime {
     }
 
     /// Restore `phase` after a failed prepare (never FAULT).
+    ///
+    /// No-op unless still `validating`, so a concurrent swap cannot be clobbered.
     pub fn abort_arm(&mut self) {
+        if self.phase() != ProgramPhase::Validating {
+            return;
+        }
         let phase = if self.engine.armed_program_id().is_some() {
             ProgramPhase::Armed
         } else {
@@ -382,8 +396,10 @@ impl Runtime {
                 let s = image
                     .get_output(slot as usize)
                     .map_err(|_| RuntimeError::not_found(name))?;
-                let forced = self.engine.io().forces.get(slot).is_some();
-                (s.value, s.quality, forced)
+                let force = self.engine.io().forces.get(slot);
+                let forced = force.is_some();
+                let value = force.map_or(s.value, |f| f.value);
+                (value, s.quality, forced)
             }
             TagKind::M => {
                 let s = image

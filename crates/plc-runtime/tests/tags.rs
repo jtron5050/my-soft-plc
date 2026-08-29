@@ -29,7 +29,7 @@ fn read_image_meta_and_force_q() {
     rt.force_tag("Q0", PlcValue::Bool(true)).unwrap();
     let view = rt.read_tag("Q0").unwrap();
     assert!(view.forced);
-    assert_eq!(view.value, PlcValue::Bool(false)); // program has not written; overlay is separate
+    assert_eq!(view.value, PlcValue::Bool(true));
 
     rt.clear_force("Q0").unwrap();
     assert!(!rt.read_tag("Q0").unwrap().forced);
@@ -86,4 +86,33 @@ fn prepare_arm_does_not_need_engine_lock() {
     assert!(rt.engine().armed_program_id().is_none());
     rt.commit_arm(prepared).unwrap();
     assert_eq!(rt.phase(), plc_types::ProgramPhase::Armed);
+}
+
+#[test]
+fn begin_arm_refuses_activate_pending() {
+    let (mut rt, _sim, _clock) = runtime_single(1, 1, 50);
+    let pkg = pack(&PackOpts {
+        id: "line",
+        spasm: Q_WRITE,
+        tasks: &[("main", "task.main")],
+        retain: &[],
+        restart: plc_package::RestartPolicy::SafeReset,
+        q_tags: &[],
+    });
+    rt.upload(&pkg).unwrap();
+    rt.activate().unwrap();
+    let err = rt.begin_arm().unwrap_err();
+    assert!(matches!(err, RuntimeError::Conflict { context } if context.contains("activate")));
+}
+
+#[test]
+fn abort_arm_does_not_clobber_swapping() {
+    let (mut rt, _sim, _clock) = runtime_single(1, 1, 50);
+    let _ctx = rt.begin_arm().unwrap();
+    assert_eq!(rt.phase(), plc_types::ProgramPhase::Validating);
+    rt.engine()
+        .epoch_hooks()
+        .set_phase(plc_types::ProgramPhase::Swapping);
+    rt.abort_arm();
+    assert_eq!(rt.phase(), plc_types::ProgramPhase::Swapping);
 }

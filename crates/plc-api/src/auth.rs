@@ -40,10 +40,10 @@ impl FromRequestParts<AppState> for Authed {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let addr = parts.extensions.get::<ConnectInfo<SocketAddr>>().map_or(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            |c| c.0,
-        );
+        let addr = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map_or(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0), |c| c.0);
         let fp = parts.extensions.get::<ClientCertFp>().copied();
         let cred = credential_from(&parts.headers, fp);
         let auth = state.auth.read().expect("auth");

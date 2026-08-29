@@ -19,7 +19,7 @@ pub async fn get(
 ) -> Result<Json<DeviceConfig>, ApiError> {
     authed.require(&state, Permission::ConfigRead)?;
     let cfg = state.config.read().expect("config").clone();
-    Ok(Json(cfg))
+    Ok(Json(redact_secrets(cfg)))
 }
 
 /// `PUT /api/v1/config`.
@@ -60,7 +60,7 @@ fn apply_config(
     }
     let cfg = validate(cfg)?;
     let old = state.config.read().expect("config").clone();
-    let restart_required = old.scan != cfg.scan || old.io.drivers != cfg.io.drivers;
+    let restart_required = needs_restart(&old, &cfg);
     let auth = AuthService::from_config(&cfg.auth, &cfg.limits)
         .map_err(|e| ApiError::bad_request("config", e.to_string()))?;
     if let Some(path) = state.config_path.as_ref() {
@@ -81,6 +81,27 @@ fn apply_config(
         Some(authed.addr),
     );
     Ok(Json(ConfigWriteResponse { restart_required }))
+}
+
+/// Listener bind, TLS paths, body-limit, scan, and I/O drivers are captured at
+/// process start (router / acceptor); those writes persist but need a restart.
+fn needs_restart(old: &DeviceConfig, cfg: &DeviceConfig) -> bool {
+    old.scan != cfg.scan
+        || old.io.drivers != cfg.io.drivers
+        || old.limits.max_package_bytes != cfg.limits.max_package_bytes
+        || old.rest.bind != cfg.rest.bind
+        || old.auth.tls_cert_path != cfg.auth.tls_cert_path
+        || old.auth.tls_key_path != cfg.auth.tls_key_path
+        || old.auth.client_ca_path != cfg.auth.client_ca_path
+}
+
+fn redact_secrets(mut cfg: DeviceConfig) -> DeviceConfig {
+    cfg.auth.tls_key_path.clear();
+    for p in &mut cfg.auth.principals {
+        p.token_sha256 = None;
+        p.cert_sha256 = None;
+    }
+    cfg
 }
 
 fn merge(base: Value, patch: Value) -> Value {

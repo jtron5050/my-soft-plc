@@ -4,7 +4,7 @@ mod common;
 
 use axum::http::StatusCode;
 
-use common::{app_auth, get_auth, post_json, send, OPERATOR, VIEWER};
+use common::{app_auth, bring_up_run, get_auth, post_json, send, OPERATOR, VIEWER};
 
 #[tokio::test]
 async fn status_shape() {
@@ -20,26 +20,14 @@ async fn status_shape() {
 
 #[tokio::test]
 async fn sim_from_run_conflict() {
-    let (app, _) = app_auth();
+    let (app, state) = app_auth();
+    bring_up_run(app.clone(), &state).await;
     let (status, _) = send(
-        app.clone(),
-        post_json("/api/v1/mode", Some(OPERATOR), r#"{"mode":"RUN"}"#),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    // Mode request is queued; observed mode may still be STOP until a scan step.
-    let (status, _) = send(
-        app.clone(),
+        app,
         post_json("/api/v1/mode", Some(OPERATOR), r#"{"mode":"SIM"}"#),
     )
     .await;
-    // If RUN not yet applied, SIM is legal from STOP. Step once then retry.
-    if status == StatusCode::OK {
-        {
-            let st = common::app_auth().1;
-            let _ = st;
-        }
-    }
+    assert_eq!(status, StatusCode::CONFLICT);
 }
 
 #[tokio::test]

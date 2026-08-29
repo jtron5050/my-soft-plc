@@ -8,13 +8,17 @@
 #![forbid(unsafe_code)]
 
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
+use axum::error_handling::HandleErrorLayer;
 use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{BoxError, Router};
+use tower::timeout::TimeoutLayer;
+use tower::ServiceBuilder;
 
 mod auth;
 mod dto;
@@ -47,10 +51,8 @@ pub fn router(state: AppState) -> Router {
                 .put(routes::config::put)
                 .patch(routes::config::patch),
         )
-        .route(
-            "/programs",
-            get(routes::programs::list).post(routes::programs::upload),
-        )
+        .route("/programs", get(routes::programs::list))
+        .merge(upload_router())
         .route(
             "/programs/{id}",
             get(routes::programs::get).delete(routes::programs::delete),
@@ -72,6 +74,28 @@ pub fn router(state: AppState) -> Router {
         .layer(DefaultBodyLimit::max(max))
         .layer(middleware::from_fn_with_state(state.clone(), count_mw))
         .with_state(state)
+}
+
+/// `POST /programs` only: 60 s upload timeout (architecture frozen limit).
+fn upload_router() -> Router<AppState> {
+    Router::new()
+        .route("/programs", post(routes::programs::upload))
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    if err.is::<tower::timeout::error::Elapsed>() {
+                        crate::error::ApiError::new(
+                            StatusCode::REQUEST_TIMEOUT,
+                            "timeout",
+                            "upload_timeout",
+                            "upload timed out after 60s",
+                        )
+                    } else {
+                        crate::error::ApiError::internal(err.to_string())
+                    }
+                }))
+                .layer(TimeoutLayer::new(Duration::from_secs(60))),
+        )
 }
 
 async fn count_mw(State(state): State<AppState>, req: Request, next: Next) -> Response {

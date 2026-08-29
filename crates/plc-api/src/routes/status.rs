@@ -39,16 +39,10 @@ pub async fn io(
     Ok(Json(build_status(&state).io))
 }
 
-/// Snapshot status (brief runtime lock).
+/// Snapshot status (brief runtime lock; no filesystem I/O).
 pub fn build_status(state: &AppState) -> StatusBody {
     let rt = state.runtime.lock().expect("runtime");
     let snap = rt.engine().status();
-    let _ = state
-        .store
-        .set_pointer("current", rt.current_info().map(|p| p.id.as_str()));
-    let _ = state
-        .store
-        .set_pointer("armed", rt.armed_info().map(|p| p.id.as_str()));
     let watchdog = if snap.mode == OperatingMode::Fault {
         "fault"
     } else {

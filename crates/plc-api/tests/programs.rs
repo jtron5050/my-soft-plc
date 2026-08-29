@@ -130,6 +130,36 @@ async fn dual_control_blocks_uploader() {
 }
 
 #[tokio::test]
+async fn dual_control_uses_uploader_not_armer() {
+    let (app, _) = app_dual();
+    let pkg = pack_line();
+    let (status, _) = send(
+        app.clone(),
+        post_bytes("/api/v1/programs", Some(ENGINEER), pkg),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _) = send(
+        app.clone(),
+        post_json("/api/v1/programs/line/arm", Some(ENGINEER_B), ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(
+        app.clone(),
+        post_json("/api/v1/programs/line/activate", Some(ENGINEER), ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = send(
+        app,
+        post_json("/api/v1/programs/line/activate", Some(ENGINEER_B), ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
 async fn concurrent_upload_429() {
     let (app, state) = app_auth();
     let _permit = state.upload_sem.acquire().await.unwrap();

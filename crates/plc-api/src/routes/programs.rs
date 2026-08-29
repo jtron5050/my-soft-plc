@@ -3,13 +3,15 @@
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequestParts, Path, Query, State};
+use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use plc_auth::{AuditAction, Permission};
 use plc_runtime::ActivateRequest;
 use plc_types::ProgramPhase as Phase;
+use tokio::sync::OwnedSemaphorePermit;
 use uuid::Uuid;
 
 use crate::auth::Authed;
@@ -18,6 +20,41 @@ use crate::error::ApiError;
 use crate::program_store::StoredMeta;
 use crate::routes::status::build_status;
 use crate::state::{ActivateJob, AppState};
+
+/// Acquired before the body is read so a second client gets 429 without
+/// buffering `max_package_bytes`.
+pub(crate) struct UploadPermit {
+    /// Held until the handler returns so the slot stays occupied.
+    _permit: OwnedSemaphorePermit,
+}
+
+impl FromRequestParts<AppState> for UploadPermit {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        _parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let permit = state.upload_sem.clone().try_acquire_owned().map_err(|_| {
+            ApiError::rate_limited("upload_busy", "concurrent upload already in progress", 1)
+        })?;
+        Ok(Self { _permit: permit })
+    }
+}
+
+/// Snapshot current/armed ids under the runtime mutex, then write pointer
+/// files after the lock is dropped.
+fn sync_program_pointers(state: &AppState) {
+    let (current, armed) = {
+        let rt = state.runtime.lock().expect("runtime");
+        (
+            rt.current_info().map(|p| p.id.clone()),
+            rt.armed_info().map(|p| p.id.clone()),
+        )
+    };
+    let _ = state.store.set_pointer("current", current.as_deref());
+    let _ = state.store.set_pointer("armed", armed.as_deref());
+}
 
 /// `GET /api/v1/programs`.
 pub async fn list(
@@ -32,12 +69,10 @@ pub async fn list(
 pub async fn upload(
     State(state): State<AppState>,
     authed: Authed,
+    _permit: UploadPermit,
     body: Bytes,
 ) -> Result<(StatusCode, Json<StoredMeta>), ApiError> {
     authed.require(&state, Permission::ProgramUpload)?;
-    let _permit = state.upload_sem.try_acquire().map_err(|_| {
-        ApiError::rate_limited("upload_busy", "concurrent upload already in progress", 1)
-    })?;
     let max = state.max_package_bytes();
     if body.len() > max {
         return Err(ApiError::too_large(body.len()));
@@ -142,7 +177,9 @@ pub async fn arm(
         let mut rt = state.runtime.lock().expect("runtime");
         match rt.commit_arm(prepared) {
             Ok(r) => {
-                rt.set_uploader(authed.principal.id.clone());
+                if let Some(up) = &meta.uploader {
+                    rt.set_uploader(up.clone());
+                }
                 r
             }
             Err(e) => {
@@ -151,7 +188,7 @@ pub async fn arm(
             }
         }
     };
-    let _ = state.store.set_pointer("armed", Some(&id));
+    sync_program_pointers(&state);
     state.record(
         &authed.principal.id,
         AuditAction::ProgramArm,
@@ -177,11 +214,30 @@ pub async fn activate(
     Query(q): Query<ActivateQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     authed.require(&state, Permission::ProgramActivate)?;
-    {
-        let auth = state.auth.read().expect("auth");
-        let rt = state.runtime.lock().expect("runtime");
-        if let Some(up) = rt.last_uploader() {
-            if !auth.dual_control_ok(up, &authed.principal.id) {
+    let store_uploader = state
+        .store
+        .get(&id)
+        .ok()
+        .and_then(|(m, _)| m.uploader)
+        .unwrap_or_default();
+    let outcome = {
+        let _guard = state.arm_lock.lock().await;
+        {
+            let auth = state.auth.read().expect("auth");
+            let rt = state.runtime.lock().expect("runtime");
+            match rt.armed_info() {
+                None => {
+                    return Err(ApiError::conflict("not_armed", "activate while not armed"));
+                }
+                Some(p) if p.id != id => {
+                    return Err(ApiError::conflict(
+                        "wrong_program",
+                        format!("armed program is '{}', not '{id}'", p.id),
+                    ));
+                }
+                Some(_) => {}
+            }
+            if !auth.dual_control_ok(&store_uploader, &authed.principal.id) {
                 return Err(ApiError::new(
                     StatusCode::FORBIDDEN,
                     "forbidden",
@@ -189,27 +245,25 @@ pub async fn activate(
                     "activate requires a different principal than the uploader",
                 ));
             }
-        }
-        match rt.armed_info() {
-            None => {
-                return Err(ApiError::conflict("not_armed", "activate while not armed"));
-            }
-            Some(p) if p.id != id => {
+            if rt.phase() == Phase::Validating {
                 return Err(ApiError::conflict(
-                    "wrong_program",
-                    format!("armed program is '{}', not '{id}'", p.id),
+                    "phase_validating",
+                    "activate while validating",
                 ));
             }
-            Some(_) => {}
+            if rt.phase() == Phase::Swapping {
+                return Err(ApiError::conflict(
+                    "phase_swapping",
+                    "activate while swapping",
+                ));
+            }
+            if rt.activate_requested() {
+                return Err(ApiError::conflict(
+                    "activate_pending",
+                    "activate already requested",
+                ));
+            }
         }
-        if rt.phase() == Phase::Swapping {
-            return Err(ApiError::conflict(
-                "phase_swapping",
-                "activate while swapping",
-            ));
-        }
-    }
-    let outcome = {
         let mut rt = state.runtime.lock().expect("runtime");
         rt.activate()?
     };
@@ -221,7 +275,7 @@ pub async fn activate(
     );
     match outcome {
         ActivateRequest::NoOp => {
-            let _ = state.store.set_pointer("armed", None);
+            sync_program_pointers(&state);
             Ok((
                 StatusCode::OK,
                 Json(serde_json::json!({
@@ -239,6 +293,7 @@ pub async fn activate(
             });
             if let Some(wait_ms) = q.wait_ms.filter(|n| *n > 0) {
                 if wait_for_idle(&state, wait_ms).await {
+                    sync_program_pointers(&state);
                     let body = build_status(&state);
                     return Ok((StatusCode::OK, Json(body)).into_response());
                 }
