@@ -1,0 +1,30 @@
+[package]
+name = "plc-telemetry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "MQTT 5 Sparkplug B 3.0 telemetry publisher (non-RT)"
+readme.workspace = true
+
+[dependencies]
+bytes = { workspace = true }
+plc-config = { workspace = true }
+plc-io = { workspace = true }
+plc-scan = { workspace = true }
+plc-types = { workspace = true }
+rumqttc = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+plc-io-sim = { workspace = true }
+plc-vm = { workspace = true }
+
+[lints]
+workspace = true

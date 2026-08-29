@@ -14,6 +14,7 @@ members = [
     "crates/plc-package",
     "crates/plc-runtime",
     "crates/plc-api",
+    "crates/plc-telemetry",
 ]
 # RT crates (plc-scan, plc-vm, …) must not depend on tokio / network /
 # std filesystem on the scan path. See deny.toml [bans] notes and
@@ -43,6 +44,7 @@ plc-retain = { path = "crates/plc-retain", version = "0.1.0" }
 plc-package = { path = "crates/plc-package", version = "0.1.0" }
 plc-runtime = { path = "crates/plc-runtime", version = "0.1.0" }
 plc-api = { path = "crates/plc-api", version = "0.1.0" }
+plc-telemetry = { path = "crates/plc-telemetry", version = "0.1.0" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
@@ -62,6 +64,8 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 rustls-pemfile = "2.2"
 uuid = { version = "1.16", features = ["v4"] }
+libc = "0.2"
+rumqttc = "0.25"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
