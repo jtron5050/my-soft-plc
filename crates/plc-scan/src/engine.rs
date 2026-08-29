@@ -506,7 +506,13 @@ impl ScanEngine {
         &self.plan
     }
 
-    /// Process image + driver (tests).
+    /// Process image + driver (read-only; REST / diagnostics).
+    #[must_use]
+    pub fn io(&self) -> &ScanIo {
+        &self.io
+    }
+
+    /// Process image + driver (tests / force overlay).
     pub fn io_mut(&mut self) -> &mut ScanIo {
         &mut self.io
     }

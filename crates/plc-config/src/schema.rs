@@ -41,6 +41,9 @@ pub struct DeviceConfig {
     /// Output behavior when `mode=STOP`.
     #[serde(default)]
     pub stop_output_policy: StopOutputPolicy,
+    /// REST listener bind.
+    #[serde(default)]
+    pub rest: RestConfig,
 }
 
 /// Deployment profile.
@@ -148,6 +151,26 @@ fn default_analog_period_ms() -> u32 {
 }
 fn default_digital_cos_ms() -> u32 {
     20
+}
+
+/// REST listener configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestConfig {
+    /// Bind address (`host:port`). Default loopback `:8443`.
+    #[serde(default = "default_rest_bind")]
+    pub bind: String,
+}
+
+impl Default for RestConfig {
+    fn default() -> Self {
+        Self {
+            bind: default_rest_bind(),
+        }
+    }
+}
+
+fn default_rest_bind() -> String {
+    "127.0.0.1:8443".into()
 }
 
 /// On-disk data paths.

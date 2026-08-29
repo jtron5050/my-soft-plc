@@ -63,3 +63,6 @@ watchdog:
   hardware_path: "/dev/watchdog"
 
 stop_output_policy: safe
+
+rest:
+  bind: "127.0.0.1:8443"

@@ -9,8 +9,11 @@ mod error;
 mod loader;
 
 pub use error::RuntimeError;
-pub use loader::{ArmReport, Runtime, RuntimeConfig};
-pub use plc_package::{RestartPolicy, VerifyPolicy};
+pub use loader::{
+    ArmContext, ArmReport, PreparedArm, ProgramInfo, RetainSnapshot, Runtime, RuntimeConfig,
+    TagView,
+};
+pub use plc_package::{RestartPolicy, TagEntry, TagKind, VerifyPolicy};
 pub use plc_retain::MapReport;
 pub use plc_scan::{
     ActivateRequest, ArmedProgram, InstallOutcome, OutputRestartPolicy, RetainCopy, ScanEngine,
