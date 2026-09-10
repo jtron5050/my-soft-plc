@@ -1,12 +1,14 @@
 //! Upload / validate / arm / activate.
 
+use std::sync::Arc;
+
 use plc_fb_primitives::PRIMITIVE_ABI;
-use plc_io::{PlcValue, ValueType};
+use plc_io::{InputInjector, PlcValue, ValueType};
 use plc_ir::{IrType, RetainLayout};
 use plc_package::{
     validate, Manifest, ParsedPackage, RestartPolicy, TagEntry, TagKind, VerifyPolicy, VerifyingKey,
 };
-use plc_retain::{map_retain, MapReport};
+use plc_retain::{map_retain, MapReport, RetainSnapshotBuffer};
 use plc_scan::{
     ActivateRequest, ArmedProgram, OutputRestartPolicy, RetainCopy, ScanClock, ScanEngine, ScanIo,
     ScanPlan, StepOutcome,
@@ -140,6 +142,9 @@ pub struct Runtime {
     current_tags: Vec<TagEntry>,
     armed_tags: Vec<TagEntry>,
     last_uploader: Option<String>,
+    input_injector: Option<Arc<dyn InputInjector>>,
+    retain_snap: Option<Arc<RetainSnapshotBuffer>>,
+    last_retain_seq: u64,
 }
 
 impl Runtime {
@@ -161,7 +166,38 @@ impl Runtime {
             current_tags: Vec::new(),
             armed_tags: Vec::new(),
             last_uploader: None,
+            input_injector: None,
+            retain_snap: None,
+            last_retain_seq: 0,
         })
+    }
+
+    /// Attach a SIM/debug input injector (clone of the sim driver handle).
+    pub fn set_input_injector(&mut self, injector: Arc<dyn InputInjector>) {
+        self.input_injector = Some(injector);
+    }
+
+    /// Lock-free retain snapshot for the T5 flusher (None until a program is current).
+    #[must_use]
+    pub fn retain_snapshot(&self) -> Option<Arc<RetainSnapshotBuffer>> {
+        self.retain_snap.clone()
+    }
+
+    /// Scan clock milliseconds.
+    #[must_use]
+    pub fn now_ms(&self) -> u64 {
+        self.engine.now_ms()
+    }
+
+    /// Next cooperative wakeup (milliseconds on the scan clock).
+    #[must_use]
+    pub fn next_wakeup_ms(&self) -> u64 {
+        self.engine.next_wakeup_ms()
+    }
+
+    /// Sparkplug device catalog for the current (else armed) tag dictionary.
+    pub fn telemetry_catalog(&self) -> Result<plc_telemetry::TagCatalog, RuntimeError> {
+        crate::catalog::catalog_from_tags(self.tag_dictionary(), Some(&self.engine.io().image))
     }
 
     /// Scan engine (tests / status).
@@ -202,6 +238,32 @@ impl Runtime {
     #[must_use]
     pub fn current_info(&self) -> Option<&ProgramInfo> {
         self.current_info.as_ref()
+    }
+
+    /// Current retain layout (after a successful activate).
+    #[must_use]
+    pub fn current_retain_layout(&self) -> Option<&RetainLayout> {
+        self.current_layout.as_ref()
+    }
+
+    /// Copy retain bytes into the current VM (boot restore; sizes must match).
+    pub fn load_retain_image(&mut self, bytes: &[u8]) -> Result<(), RuntimeError> {
+        let layout = self
+            .current_layout
+            .clone()
+            .ok_or_else(|| RuntimeError::bad_request("no current retain layout"))?;
+        let vm = self
+            .engine_mut()
+            .vm_mut()
+            .ok_or_else(|| RuntimeError::bad_request("no current program for retain load"))?;
+        vm.load_retain_image(bytes, &layout)
+            .map_err(|e| RuntimeError::bad_request(e.to_string()))
+    }
+
+    /// Packed retain segment of the current VM (None until a program is current).
+    #[must_use]
+    pub fn current_retain_bytes(&self) -> Option<&[u8]> {
+        Some(self.engine.vm()?.retain().as_bytes())
     }
 
     /// Armed program metadata (after a successful arm).
@@ -371,6 +433,7 @@ impl Runtime {
     pub fn step(&mut self) -> Result<StepOutcome, RuntimeError> {
         let out = self.engine.step()?;
         self.sync_layouts_after_step();
+        self.publish_retain_if_dirty();
         Ok(out)
     }
 
@@ -378,7 +441,61 @@ impl Runtime {
     pub fn run_due(&mut self) -> Result<u32, RuntimeError> {
         let n = self.engine.run_due()?;
         self.sync_layouts_after_step();
+        self.publish_retain_if_dirty();
         Ok(n)
+    }
+
+    /// SIM-only: write a `%I` tag through the attached injector.
+    pub fn inject_input(&mut self, name: &str, value: PlcValue) -> Result<(), RuntimeError> {
+        if self.mode() != OperatingMode::Sim {
+            return Err(RuntimeError::bad_request(
+                "input inject is only allowed in mode=SIM",
+            ));
+        }
+        let Some(inj) = &self.input_injector else {
+            return Err(RuntimeError::bad_request(
+                "no SIM input injector configured",
+            ));
+        };
+        let (kind, slot, ty) = self.lookup_tag(name)?;
+        if kind != TagKind::I {
+            return Err(RuntimeError::bad_request(format!(
+                "input inject is only supported on %I tags (got {kind:?})"
+            )));
+        }
+        if !value_matches(value, ty) {
+            return Err(RuntimeError::bad_request(format!(
+                "inject type mismatch for '{name}'"
+            )));
+        }
+        inj.set_input(slot as usize, value)
+            .map_err(|e| RuntimeError::bad_request(e.to_string()))
+    }
+
+    /// SIM-only: override `%I` quality (fault injection).
+    pub fn inject_input_quality(
+        &mut self,
+        name: &str,
+        quality: Quality,
+    ) -> Result<(), RuntimeError> {
+        if self.mode() != OperatingMode::Sim {
+            return Err(RuntimeError::bad_request(
+                "input inject is only allowed in mode=SIM",
+            ));
+        }
+        let Some(inj) = &self.input_injector else {
+            return Err(RuntimeError::bad_request(
+                "no SIM input injector configured",
+            ));
+        };
+        let (kind, slot, _) = self.lookup_tag(name)?;
+        if kind != TagKind::I {
+            return Err(RuntimeError::bad_request(format!(
+                "input inject is only supported on %I tags (got {kind:?})"
+            )));
+        }
+        inj.set_input_quality(slot as usize, quality)
+            .map_err(|e| RuntimeError::bad_request(e.to_string()))
     }
 
     /// Debug-read a tag by dictionary or image-meta name.
@@ -525,11 +642,43 @@ impl Runtime {
                 self.current_layout = self.armed_layout.take();
                 self.current_info = self.armed_info.take();
                 self.current_tags = std::mem::take(&mut self.armed_tags);
+                self.resize_retain_snapshot();
             } else {
                 // Disarm / activate NoOp dropped B without committing it.
                 self.armed_layout = None;
             }
         }
+    }
+
+    fn resize_retain_snapshot(&mut self) {
+        let size = self
+            .current_layout
+            .as_ref()
+            .map_or(0, |l| l.retain_size as usize);
+        if size == 0 {
+            self.retain_snap = None;
+            return;
+        }
+        if self.retain_snap.as_ref().is_some_and(|b| b.size() == size) {
+            return;
+        }
+        self.retain_snap = Some(Arc::new(RetainSnapshotBuffer::new(size)));
+        self.last_retain_seq = 0;
+    }
+
+    fn publish_retain_if_dirty(&mut self) {
+        let seq = self.engine.retain_dirty().seq();
+        if seq == 0 || seq == self.last_retain_seq {
+            return;
+        }
+        let Some(buf) = self.retain_snap.clone() else {
+            return;
+        };
+        let Some(vm) = self.engine.vm() else {
+            return;
+        };
+        buf.publish(vm.retain().as_bytes());
+        self.last_retain_seq = seq;
     }
 }
 

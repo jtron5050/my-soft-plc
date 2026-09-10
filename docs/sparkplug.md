@@ -98,8 +98,9 @@ Node DATA metrics include **names** (few of them).
 - DDATA: **alias only** (no name) + live value + properties.
 - Unknown `(is_input, tag_hint)` samples are dropped.
 - Empty catalog → no DBIRTH/DDATA until `TelemetryService::set_catalog` or
-  `TelemetryHandle::set_catalog` (PR-14 maps `TagEntry` + io-map `unit`
-  after activate). Clone `TelemetryService::handle` before spawning `run`;
+  `TelemetryHandle::set_catalog`. PR-14 maps `TagEntry` + io-map `unit`
+  after activate via `plc_runtime::catalog_from_tags` / `Runtime::telemetry_catalog`.
+  Clone `TelemetryService::handle` before spawning `run`;
   `run` consumes the service value. Replacing a non-empty catalog while
   born publishes DDEATH for the old device metric set, then DBIRTH for the
   new catalog.

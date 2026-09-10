@@ -32,7 +32,7 @@ mod state;
 mod tls;
 
 pub use error::{ApiError, ErrorBody};
-pub use listen::serve;
+pub use listen::{bind_listener, serve, serve_on};
 pub use program_store::{ProgramStore, StoredMeta};
 pub use state::AppState;
 pub use tls::{listen_mode, ListenMode};

@@ -235,7 +235,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
     put:
-      summary: Force write (%Q only; max 100/min)
+      summary: Force write (%Q) or SIM input inject (%I in mode=SIM; max 100/min)
       requestBody:
         required: true
         content:

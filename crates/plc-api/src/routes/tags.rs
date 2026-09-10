@@ -64,22 +64,31 @@ pub async fn put(
             ));
         }
     }
-    let ty = {
+    let (ty, kind_i) = {
         let rt = state.runtime.lock().expect("runtime");
         let view = rt.read_tag(&name)?;
-        view.type_name().to_string()
+        (
+            view.type_name().to_string(),
+            view.kind == plc_package::TagKind::I,
+        )
     };
     let value =
         parse_force_value(&ty, &body.value).map_err(|m| ApiError::bad_request("validation", m))?;
-    {
+    let forced = {
         let mut rt = state.runtime.lock().expect("runtime");
-        rt.force_tag(&name, value)?;
-    }
+        if kind_i {
+            rt.inject_input(&name, value)?;
+            false
+        } else {
+            rt.force_tag(&name, value)?;
+            true
+        }
+    };
     state.record(
         &authed.principal.id,
         AuditAction::TagForce,
         name,
         Some(authed.addr),
     );
-    Ok(Json(TagWriteResponse { forced: true }))
+    Ok(Json(TagWriteResponse { forced }))
 }

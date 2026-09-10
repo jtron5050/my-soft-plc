@@ -80,3 +80,15 @@ pub trait IoDriver: Send {
     /// Diagnostics snapshot.
     fn diagnostics(&self) -> DriverDiag;
 }
+
+/// Non-RT handle for injecting process-image inputs (SIM / tests).
+///
+/// The scan thread still samples via [`IoDriver::poll_inputs`]. This trait is
+/// for REST/debug writers that must not own the driver box inside [`ScanIo`].
+pub trait InputInjector: Send + Sync {
+    /// Write an input channel (index matches `%I` slot when the sim map is 1:1).
+    fn set_input(&self, idx: usize, value: PlcValue) -> Result<(), IoError>;
+
+    /// Override input quality (e.g. Bad for fault injection).
+    fn set_input_quality(&self, idx: usize, quality: Quality) -> Result<(), IoError>;
+}

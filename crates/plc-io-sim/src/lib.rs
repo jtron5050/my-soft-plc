@@ -136,6 +136,83 @@ impl IoDriver for SimDriver {
     }
 }
 
+/// Cloneable sim driver for scan + REST/debug inject (PR-14).
+#[derive(Debug, Clone)]
+pub struct SharedSim {
+    inner: std::sync::Arc<std::sync::Mutex<SimDriver>>,
+    n_inputs: usize,
+}
+
+impl SharedSim {
+    /// Create and `start` a sim driver with fixed channel counts.
+    #[must_use]
+    pub fn new(name: impl Into<String>, n_inputs: usize, n_outputs: usize) -> Self {
+        let mut d = SimDriver::new(name, n_inputs, n_outputs);
+        d.start().expect("sim driver start");
+        Self {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(d)),
+            n_inputs,
+        }
+    }
+
+    /// Last applied outputs (tests).
+    #[must_use]
+    pub fn last_outputs(&self) -> Vec<PlcValue> {
+        self.inner.lock().expect("sim").last_outputs.clone()
+    }
+
+    /// Last `force_safe` seen on apply (tests).
+    #[must_use]
+    pub fn last_force_safe(&self) -> bool {
+        self.inner.lock().expect("sim").last_force_safe
+    }
+}
+
+impl IoDriver for SharedSim {
+    fn name(&self) -> &'static str {
+        "sim"
+    }
+
+    fn start(&mut self) -> Result<(), IoError> {
+        Ok(())
+    }
+
+    fn stop(&mut self) {}
+
+    fn poll_inputs(&mut self, out: &mut InputUpdate) -> Result<(), IoError> {
+        self.inner.lock().expect("sim").poll_inputs(out)
+    }
+
+    fn apply_outputs(&mut self, image: &OutputImage) -> Result<(), IoError> {
+        self.inner.lock().expect("sim").apply_outputs(image)
+    }
+
+    fn diagnostics(&self) -> DriverDiag {
+        self.inner.lock().expect("sim").diagnostics()
+    }
+}
+
+impl plc_io::InputInjector for SharedSim {
+    fn set_input(&self, idx: usize, value: PlcValue) -> Result<(), IoError> {
+        if idx >= self.n_inputs {
+            return Err(IoError::Bounds(format!("sim input slot {idx}")));
+        }
+        self.inner.lock().expect("sim").set_input(idx, value);
+        Ok(())
+    }
+
+    fn set_input_quality(&self, idx: usize, quality: Quality) -> Result<(), IoError> {
+        if idx >= self.n_inputs {
+            return Err(IoError::Bounds(format!("sim input slot {idx}")));
+        }
+        self.inner
+            .lock()
+            .expect("sim")
+            .set_input_quality(idx, quality);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,31 +1,34 @@
 [package]
-name = "plc-runtime"
+name = "soft-plc-runtime"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Dual-buffer program load, epoch activate, and hot-swap policy glue"
+description = "soft-plc-runtime process binary (architecture PR-14)"
 readme.workspace = true
 
+[[bin]]
+name = "soft-plc-runtime"
+path = "src/main.rs"
+
 [dependencies]
-libc = { workspace = true }
+clap = { workspace = true }
+plc-api = { workspace = true }
 plc-config = { workspace = true }
-plc-fb-primitives = { workspace = true }
 plc-io = { workspace = true }
-plc-ir = { workspace = true }
+plc-io-sim = { workspace = true }
 plc-package = { workspace = true }
 plc-retain = { workspace = true }
+plc-runtime = { workspace = true }
 plc-scan = { workspace = true }
 plc-telemetry = { workspace = true }
 plc-types = { workspace = true }
-plc-vm = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
-
-[dev-dependencies]
-plc-io-sim = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

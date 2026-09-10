@@ -125,4 +125,17 @@ impl AppState {
     pub fn max_package_bytes(&self) -> usize {
         self.config.read().expect("config").limits.max_package_bytes as usize
     }
+
+    /// Snapshot current/armed ids under the runtime mutex, then write pointer files.
+    pub fn sync_program_pointers(&self) {
+        let (current, armed) = {
+            let rt = self.runtime.lock().expect("runtime");
+            (
+                rt.current_info().map(|p| p.id.clone()),
+                rt.armed_info().map(|p| p.id.clone()),
+            )
+        };
+        let _ = self.store.set_pointer("current", current.as_deref());
+        let _ = self.store.set_pointer("armed", armed.as_deref());
+    }
 }

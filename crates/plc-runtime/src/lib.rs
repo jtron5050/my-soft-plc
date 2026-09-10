@@ -3,11 +3,14 @@
 //! Non-RT glue: upload → validate → arm (shadow retain) → request activate.
 //! The scan engine performs the quiet-point join, skip rule, and install CS.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
+mod catalog;
 mod error;
 mod loader;
+mod scan_thread;
 
+pub use catalog::catalog_from_tags;
 pub use error::RuntimeError;
 pub use loader::{
     ArmContext, ArmReport, PreparedArm, ProgramInfo, RetainSnapshot, Runtime, RuntimeConfig,
@@ -20,3 +23,4 @@ pub use plc_scan::{
     ScanIo, ScanPlan,
 };
 pub use plc_types::{OperatingMode, ProgramPhase};
+pub use scan_thread::spawn_scan_thread;

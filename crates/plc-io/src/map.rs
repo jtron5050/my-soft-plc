@@ -1,6 +1,13 @@
 //! I/O map schema: modules, bindings, scale/offset/clamp.
 
+use std::collections::BTreeSet;
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
+
+use crate::error::IoError;
+use crate::image::{ProcessImage, SlotMeta, TypedSlot};
+use crate::value::PlcValue;
 
 /// Root io-map document (architecture illustrative YAML).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -9,6 +16,199 @@ pub struct IoMap {
     pub version: u32,
     /// Modules (drivers + bindings).
     pub modules: Vec<IoModule>,
+}
+
+impl IoMap {
+    /// Parse a YAML io-map from `text`.
+    pub fn from_yaml_str(text: &str) -> Result<Self, IoError> {
+        let map: Self =
+            serde_yaml::from_str(text).map_err(|e| IoError::Map(format!("yaml parse: {e}")))?;
+        if map.version != 1 {
+            return Err(IoError::Map(format!(
+                "unsupported io-map version {} (expected 1)",
+                map.version
+            )));
+        }
+        if map.modules.is_empty() {
+            return Err(IoError::Map(
+                "io-map must contain at least one module".into(),
+            ));
+        }
+        Ok(map)
+    }
+
+    /// Load YAML from `path`.
+    pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, IoError> {
+        let path = path.as_ref();
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| IoError::Map(format!("read {}: {e}", path.display())))?;
+        Self::from_yaml_str(&text)
+    }
+
+    /// Allocate a process image from bindings (slot order = appearance when `slot` omitted).
+    ///
+    /// PR-14: a single `sim` module is 1:1 with image slots. Later drivers reuse
+    /// the same layout builder.
+    pub fn build_image(&self) -> Result<ProcessImage, IoError> {
+        let mut inputs: Vec<Option<SlotBuild>> = Vec::new();
+        let mut outputs: Vec<Option<SlotBuild>> = Vec::new();
+        let mut memory: Vec<Option<SlotBuild>> = Vec::new();
+        let mut next_i = 0u32;
+        let mut next_q = 0u32;
+        let mut next_m = 0u32;
+        let mut names = BTreeSet::new();
+
+        for module in &self.modules {
+            if module.id.trim().is_empty() {
+                return Err(IoError::Map("module.id must be non-empty".into()));
+            }
+            if module.driver.trim().is_empty() {
+                return Err(IoError::Map(format!(
+                    "module '{}' driver must be non-empty",
+                    module.id
+                )));
+            }
+            for b in &module.bindings {
+                if b.tag.trim().is_empty() {
+                    return Err(IoError::Map(format!(
+                        "module '{}': binding tag must be non-empty",
+                        module.id
+                    )));
+                }
+                if !names.insert(b.tag.clone()) {
+                    return Err(IoError::Map(format!("duplicate tag '{}'", b.tag)));
+                }
+                let (plane, next) = match b.image {
+                    ImagePlane::I => (&mut inputs, &mut next_i),
+                    ImagePlane::Q => (&mut outputs, &mut next_q),
+                    ImagePlane::M => (&mut memory, &mut next_m),
+                };
+                let slot = match b.slot {
+                    Some(s) => s,
+                    None => {
+                        let s = *next;
+                        *next = next.saturating_add(1);
+                        s
+                    }
+                };
+                let idx = slot as usize;
+                if idx >= plane.len() {
+                    plane.resize_with(idx + 1, || None);
+                }
+                if plane[idx].is_some() {
+                    return Err(IoError::Map(format!(
+                        "duplicate {} slot {slot} (tag '{}')",
+                        plane_name(b.image),
+                        b.tag
+                    )));
+                }
+                if b.slot.is_some() {
+                    *next = (*next).max(slot.saturating_add(1));
+                }
+                let safe = match b.image {
+                    ImagePlane::Q => Some(parse_safe_state(b.value_type, b.safe_state.as_ref())?),
+                    _ => None,
+                };
+                plane[idx] = Some(SlotBuild {
+                    tag: b.tag.clone(),
+                    ty: b.value_type,
+                    unit: b.unit.clone(),
+                    safe,
+                });
+            }
+        }
+
+        Ok(ProcessImage {
+            inputs: fill_slots(&inputs),
+            outputs: fill_slots(&outputs),
+            memory: fill_slots(&memory),
+            input_meta: fill_meta(&inputs, "I"),
+            output_meta: fill_meta(&outputs, "Q"),
+            memory_meta: fill_meta(&memory, "M"),
+            output_safe: outputs
+                .iter()
+                .map(|s| {
+                    s.as_ref()
+                        .and_then(|b| b.safe)
+                        .unwrap_or(PlcValue::Bool(false))
+                })
+                .collect(),
+        })
+    }
+}
+
+#[derive(Clone)]
+struct SlotBuild {
+    tag: String,
+    ty: ValueType,
+    unit: String,
+    safe: Option<PlcValue>,
+}
+
+fn plane_name(p: ImagePlane) -> &'static str {
+    match p {
+        ImagePlane::I => "%I",
+        ImagePlane::Q => "%Q",
+        ImagePlane::M => "%M",
+    }
+}
+
+fn fill_slots(plane: &[Option<SlotBuild>]) -> Vec<TypedSlot> {
+    plane
+        .iter()
+        .map(|s| TypedSlot::zero(s.as_ref().map_or(ValueType::Bool, |b| b.ty)))
+        .collect()
+}
+
+fn fill_meta(plane: &[Option<SlotBuild>], prefix: &str) -> Vec<SlotMeta> {
+    plane
+        .iter()
+        .enumerate()
+        .map(|(i, s)| match s {
+            Some(b) => SlotMeta {
+                tag: b.tag.clone(),
+                ty: b.ty,
+                unit: b.unit.clone(),
+            },
+            None => SlotMeta {
+                tag: format!("{prefix}{i}"),
+                ty: ValueType::Bool,
+                unit: String::new(),
+            },
+        })
+        .collect()
+}
+
+fn parse_safe_state(ty: ValueType, raw: Option<&serde_json::Value>) -> Result<PlcValue, IoError> {
+    let Some(raw) = raw else {
+        return Ok(PlcValue::default_of(ty));
+    };
+    match ty {
+        ValueType::Bool => match raw {
+            serde_json::Value::Bool(b) => Ok(PlcValue::Bool(*b)),
+            other => Err(IoError::Map(format!("safe_state {other} is not a BOOL"))),
+        },
+        ValueType::Int => json_i64(raw).map(|n| PlcValue::Int(n as i16)),
+        ValueType::Dint => json_i64(raw).map(|n| PlcValue::Dint(n as i32)),
+        ValueType::Time => json_i64(raw).map(|n| PlcValue::Time(n as i32)),
+        ValueType::Real => match raw {
+            serde_json::Value::Number(n) => n
+                .as_f64()
+                .map(|f| PlcValue::Real(f as f32))
+                .ok_or_else(|| IoError::Map("safe_state REAL overflow".into())),
+            _ => Err(IoError::Map("safe_state is not a REAL".into())),
+        },
+    }
+}
+
+fn json_i64(raw: &serde_json::Value) -> Result<i64, IoError> {
+    match raw {
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .ok_or_else(|| IoError::Map("safe_state integer overflow".into())),
+        serde_json::Value::Bool(b) => Ok(i64::from(*b)),
+        _ => Err(IoError::Map("safe_state is not an integer".into())),
+    }
 }
 
 /// One I/O module backed by a driver instance.
@@ -166,4 +366,67 @@ pub enum RawType {
     Uint,
     /// REAL.
     Real,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assigns_slots_in_binding_order() {
+        let yaml = r#"
+version: 1
+modules:
+  - id: sim_line
+    driver: sim
+    bindings:
+      - tag: Conveyor1/StartCmd
+        image: I
+      - tag: Conveyor1/RunFwd
+        image: Q
+        safe_state: false
+      - tag: Conveyor1/Fault
+        image: Q
+"#;
+        let map = IoMap::from_yaml_str(yaml).unwrap();
+        let image = map.build_image().unwrap();
+        assert_eq!(image.inputs.len(), 1);
+        assert_eq!(image.outputs.len(), 2);
+        assert_eq!(image.input_meta[0].tag, "Conveyor1/StartCmd");
+        assert_eq!(image.output_meta[0].tag, "Conveyor1/RunFwd");
+        assert_eq!(image.output_meta[1].tag, "Conveyor1/Fault");
+        assert_eq!(image.output_safe[0], PlcValue::Bool(false));
+    }
+
+    #[test]
+    fn rejects_duplicate_tags() {
+        let yaml = r#"
+version: 1
+modules:
+  - id: a
+    driver: sim
+    bindings:
+      - tag: X
+        image: I
+      - tag: X
+        image: Q
+"#;
+        let map = IoMap::from_yaml_str(yaml).unwrap();
+        let err = map.build_image().unwrap_err();
+        assert!(err.to_string().contains("duplicate tag"));
+    }
+
+    #[test]
+    fn loads_sim_plant_io_map() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../samples/configs/sim-plant-io-map.yaml");
+        let map = IoMap::load_from_path(&path).expect("sim-plant-io-map.yaml");
+        let image = map.build_image().unwrap();
+        assert_eq!(image.inputs.len(), 6);
+        assert_eq!(image.outputs.len(), 3);
+        assert_eq!(image.input_meta[0].tag, "Conveyor1/StartCmd");
+        assert_eq!(image.input_meta[5].tag, "Conveyor1/LocalMode");
+        assert_eq!(image.output_meta[0].tag, "Conveyor1/RunFwd");
+        assert_eq!(image.output_meta[2].tag, "Conveyor1/Ready");
+    }
 }

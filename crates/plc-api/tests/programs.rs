@@ -2,6 +2,8 @@
 
 mod common;
 
+use std::time::Duration;
+
 use axum::http::StatusCode;
 use plc_scan::ModeRequest;
 
@@ -71,6 +73,20 @@ async fn upload_arm_activate_flow() {
 
     let (status, _) = send(app, delete_auth("/api/v1/programs/line", ENGINEER)).await;
     assert_eq!(status, StatusCode::CONFLICT);
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        if state.store.pointer("current").as_deref() == Some("line") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "current pointer not written after 202 activate, got {:?}",
+            state.store.pointer("current")
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(state.store.pointer("armed").is_none());
 }
 
 #[tokio::test]

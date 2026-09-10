@@ -25,15 +25,24 @@ Rust monorepo (`crates/*`). Current crates:
 | [`plc-scan`](crates/plc-scan) | Cooperative scan scheduler, modes, software watchdog, TelemetrySource |
 | [`plc-retain`](crates/plc-retain) | Symbolic retain map, A/B NV store, T5 flush API |
 | [`plc-package`](crates/plc-package) | `.spkg` v1 container, JSON/JCS manifest, Ed25519 verify |
-| [`plc-runtime`](crates/plc-runtime) | Dual-buffer load, epoch activate, hot-swap policy glue |
+| [`plc-runtime`](crates/plc-runtime) | Dual-buffer load, epoch activate, hot-swap glue, scan thread |
 | [`plc-api`](crates/plc-api) | REST config/status API (axum + tokio), OpenAPI at [`docs/openapi/openapi.yaml`](docs/openapi/openapi.yaml) |
 | [`plc-telemetry`](crates/plc-telemetry) | MQTT 5 Sparkplug B 3.0 publisher (non-RT) |
+| [`soft-plc-runtime`](crates/soft-plc-runtime) | Process binary: scan + REST + MQTT + retain flush |
 
 Sparkplug contract: [`docs/sparkplug.md`](docs/sparkplug.md).
 
-Sample programs (text-reviewable `fixture.spasm`): under [`samples/programs/`](samples/programs/).
+Sample programs (text-reviewable `fixture.spasm`): under [`samples/programs/`](samples/programs/). Demo conveyor: [`samples/programs/demo-conveyor/`](samples/programs/demo-conveyor/).
 
-Sample config: [`samples/configs/sim-plant.yaml`](samples/configs/sim-plant.yaml).
+Sample config: [`samples/configs/sim-plant.yaml`](samples/configs/sim-plant.yaml). Runbook: [`docs/runbook.md`](docs/runbook.md).
+
+```bash
+cargo run -p soft-plc-runtime -- \
+  --config samples/configs/sim-plant.yaml \
+  --data-dir /tmp/soft-plc \
+  --program samples/programs/demo-conveyor/fixture.spkg \
+  --mode SIM
+```
 
 ## Development
 
@@ -50,4 +59,4 @@ CI runs the same checks on every push and pull request.
 
 ## Status
 
-PR-01–PR-12 are in place (workspace through REST API). This branch adds MQTT Sparkplug B telemetry (PR-13).
+PR-01–PR-14 are in place (workspace through the `soft-plc-runtime` binary and SIM demo conveyor).

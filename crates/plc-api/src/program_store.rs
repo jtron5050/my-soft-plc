@@ -136,6 +136,18 @@ impl ProgramStore {
         }
         Ok(())
     }
+
+    /// Read pointer file `current` or `armed`.
+    #[must_use]
+    pub fn pointer(&self, name: &str) -> Option<String> {
+        let text = fs::read_to_string(self.root.join(name)).ok()?;
+        let id = text.trim();
+        if id.is_empty() {
+            None
+        } else {
+            Some(id.to_string())
+        }
+    }
 }
 
 fn load_meta(path: &Path) -> Result<StoredMeta, ApiError> {

@@ -1,0 +1,70 @@
+; Demo conveyor (architecture ConveyorDrive, PR-14).
+; ST-subset equivalent (PR-15 later):
+;   interlock := PullCordOK AND BeltSlipOK AND NOT ChuteBlocked
+;                AND q_good(PullCordOK/BeltSlipOK/ChuteBlocked)
+;   Ready := interlock AND NOT LocalMode
+;   Fault := NOT interlock
+;   TON(IN := StartCmd AND Ready, PT := T#1s)
+;   RS(S := TON.Q, R := StopCmd OR Fault); RunFwd := RS.Q
+;   if RunFwd then RunHours := RunHours + 0.5/3600.0  (* slow 500 ms *)
+;
+; Image (io-map order):
+;   I0 StartCmd  I1 StopCmd  I2 PullCordOK  I3 BeltSlipOK
+;   I4 ChuteBlocked  I5 LocalMode
+;   Q0 RunFwd  Q1 Fault  Q2 Ready
+;   retain+0 REAL RunHours
+;
+; Data: 0 BOOL interlock; 4 BOOL TON.Q; 8 TIME TON.ET
+
+.header data_size=32 retain_size=4 input_slots=6 output_slots=3
+
+.entry task.fast
+LD_I       2
+LD_IQ      2
+AND
+LD_I       3
+AND
+LD_IQ      3
+AND
+LD_I       4
+NOT
+AND
+LD_IQ      4
+AND
+ST_DATA    0
+LD_DATA    0
+NOT
+ST_Q       1
+LD_DATA    0
+LD_I       5
+NOT
+AND
+ST_Q       2
+HALT
+
+.entry task.main
+LD_I       0
+LD_Q       2
+AND
+PUSH_TIME  1000
+CALL_FB    prim=TON instance=0
+ST_DATA    4
+ST_DATA    8
+LD_DATA    4
+LD_I       1
+LD_Q       1
+OR
+CALL_FB    prim=RS instance=0
+ST_Q       0
+HALT
+
+.entry task.slow
+LD_Q       0
+JMP_IF_NOT skip_hours
+LD_RETAIN  0
+CONV       REAL
+PUSHI_REAL 0.0001388889
+ADD
+ST_RETAIN  0
+skip_hours:
+HALT

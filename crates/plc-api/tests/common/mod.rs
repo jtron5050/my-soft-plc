@@ -130,6 +130,31 @@ pub fn app_auth() -> (Router, AppState) {
     (r, state)
 }
 
+/// Auth app with a SIM input injector (PR-14 `%I` PUT).
+pub fn app_sim_inject() -> (Router, AppState) {
+    use std::sync::Arc;
+
+    use plc_io_sim::SharedSim;
+    use plc_scan::MonotonicClock;
+
+    let root = tmp_dir();
+    let cfg = load_cfg(&root, true, false);
+    let sim = SharedSim::new("sim", 1, 1);
+    let io = plc_scan::ScanIo::new(ProcessImage::with_sizes(1, 1, 0), Box::new(sim.clone()));
+    let mut rt = Runtime::new(
+        ScanPlan::from_config(&cfg).unwrap(),
+        io,
+        Box::new(MonotonicClock::new()),
+        RuntimeConfig::default(),
+    )
+    .unwrap();
+    rt.set_input_injector(Arc::new(sim));
+    let cfg_path = root.join("device.yaml");
+    plc_config::save_to_path(&cfg_path, &cfg).unwrap();
+    let state = AppState::new(cfg, rt, Some(cfg_path)).unwrap();
+    (router(state.clone()), state)
+}
+
 pub fn app_dual() -> (Router, AppState) {
     let (state, _) = make_state(true, true);
     (router(state.clone()), state)
