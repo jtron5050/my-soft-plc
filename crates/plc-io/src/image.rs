@@ -13,6 +13,8 @@ pub struct SlotMeta {
     pub tag: String,
     /// Value type.
     pub ty: ValueType,
+    /// Engineering unit from the io-map (`engUnit`); empty omits the property.
+    pub unit: String,
 }
 
 /// Typed slot storage cell.
@@ -69,18 +71,21 @@ impl ProcessImage {
                 .map(|i| SlotMeta {
                     tag: format!("I{i}"),
                     ty: ValueType::Bool,
+                    unit: String::new(),
                 })
                 .collect(),
             output_meta: (0..n_q)
                 .map(|i| SlotMeta {
                     tag: format!("Q{i}"),
                     ty: ValueType::Bool,
+                    unit: String::new(),
                 })
                 .collect(),
             memory_meta: (0..n_m)
                 .map(|i| SlotMeta {
                     tag: format!("M{i}"),
                     ty: ValueType::Bool,
+                    unit: String::new(),
                 })
                 .collect(),
             output_safe: vec![PlcValue::Bool(false); n_q],

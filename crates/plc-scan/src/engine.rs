@@ -546,6 +546,18 @@ impl ScanEngine {
         Ok(())
     }
 
+    /// Monotonic milliseconds from the scan clock (KD-16).
+    #[must_use]
+    pub fn now_ms(&self) -> u64 {
+        self.clock.now_ms()
+    }
+
+    /// Earliest `next_due_ms` across cooperative tasks (sleep target for the RT loop).
+    #[must_use]
+    pub fn next_wakeup_ms(&self) -> u64 {
+        self.tasks.iter().map(|t| t.next_due_ms).min().unwrap_or(0)
+    }
+
     /// Run every task that is due, highest priority first. Returns how many ran.
     pub fn run_due(&mut self) -> Result<u32, ScanError> {
         self.apply_mode_boundary();
@@ -733,10 +745,6 @@ impl ScanEngine {
             .iter()
             .copied()
             .find(|&i| self.tasks[i].next_due_ms <= now_ms)
-    }
-
-    fn next_wakeup_ms(&self) -> u64 {
-        self.tasks.iter().map(|t| t.next_due_ms).min().unwrap_or(0)
     }
 
     fn enter_fault(&mut self) {

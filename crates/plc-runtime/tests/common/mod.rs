@@ -176,3 +176,89 @@ pub fn runtime_multi() -> (Runtime, SharedSim, VirtualClock) {
     .unwrap();
     (rt, sim, clock)
 }
+
+pub fn demo_plan() -> ScanPlan {
+    ScanPlan::new(vec![
+        TaskPlan {
+            name: "fast".into(),
+            period_ms: 20,
+            entry: "task.fast".into(),
+            priority: 100,
+        },
+        TaskPlan {
+            name: "main".into(),
+            period_ms: 50,
+            entry: "task.main".into(),
+            priority: 50,
+        },
+        TaskPlan {
+            name: "slow".into(),
+            period_ms: 500,
+            entry: "task.slow".into(),
+            priority: 10,
+        },
+    ])
+    .unwrap()
+}
+
+pub fn pack_demo_conveyor() -> Vec<u8> {
+    let spasm = include_str!("../../../../samples/programs/demo-conveyor/fixture.spasm");
+    pack_demo_from_spasm(spasm)
+}
+
+pub fn pack_demo_from_spasm(spasm: &str) -> Vec<u8> {
+    let module = assemble(spasm).expect("assemble demo-conveyor");
+    let mut task_entries = BTreeMap::new();
+    task_entries.insert("fast".into(), "task.fast".into());
+    task_entries.insert("main".into(), "task.main".into());
+    task_entries.insert("slow".into(), "task.slow".into());
+    let tag_dictionary = vec![
+        demo_tag("Conveyor1/StartCmd", IrType::Bool, TagKind::I, 0),
+        demo_tag("Conveyor1/StopCmd", IrType::Bool, TagKind::I, 1),
+        demo_tag("Conveyor1/PullCordOK", IrType::Bool, TagKind::I, 2),
+        demo_tag("Conveyor1/BeltSlipOK", IrType::Bool, TagKind::I, 3),
+        demo_tag("Conveyor1/ChuteBlocked", IrType::Bool, TagKind::I, 4),
+        demo_tag("Conveyor1/LocalMode", IrType::Bool, TagKind::I, 5),
+        demo_tag("Conveyor1/RunFwd", IrType::Bool, TagKind::Q, 0),
+        demo_tag("Conveyor1/Fault", IrType::Bool, TagKind::Q, 1),
+        demo_tag("Conveyor1/Ready", IrType::Bool, TagKind::Q, 2),
+        demo_tag("Conveyor1/RunHours", IrType::Real, TagKind::R, 0),
+    ];
+    let manifest = Manifest {
+        id: "demo-conveyor".into(),
+        version: "0.1.0".into(),
+        build_id: "pr-14".into(),
+        ir_major: module.ir_major,
+        ir_minor: module.ir_minor,
+        primitive_abi: 1,
+        task_entries,
+        retain_symbols: vec![ManifestRetainSymbol {
+            name: "Conveyor1/RunHours".into(),
+            ty: IrTypeName(IrType::Real),
+            offset: 0,
+        }],
+        tag_dictionary,
+        restart_policy: RestartPolicy::SafeReset,
+        compatibility_hash: "00".repeat(32),
+        input_slots: Some(module.input_slots),
+        output_slots: Some(module.output_slots),
+        data_size: Some(module.data_size),
+        retain_size: Some(module.retain_size),
+        const_size: Some(module.const_size),
+    };
+    PackageBuilder::new(manifest)
+        .section_module(&module)
+        .unwrap()
+        .unsigned()
+        .to_bytes()
+        .unwrap()
+}
+
+fn demo_tag(name: &str, ty: IrType, kind: TagKind, slot: u32) -> TagEntry {
+    TagEntry {
+        name: name.into(),
+        ty: IrTypeName(ty),
+        kind,
+        slot: Some(slot),
+    }
+}

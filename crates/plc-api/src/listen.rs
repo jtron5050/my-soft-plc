@@ -22,16 +22,27 @@ use crate::tls::{listen_mode, ListenMode};
 
 /// Bind `cfg.rest.bind` and serve until the process is cancelled.
 pub async fn serve(state: AppState) -> Result<(), ApiError> {
+    let listener = bind_listener(&state).await?;
+    serve_on(listener, state).await
+}
+
+/// Bind `rest.bind` without serving (tests / supervisor port discovery).
+pub async fn bind_listener(state: &AppState) -> Result<TcpListener, ApiError> {
     let cfg = state.config.read().expect("config").clone();
     let addr: SocketAddr = cfg
         .rest
         .bind
         .parse()
         .map_err(|e| ApiError::bad_request("config", format!("rest.bind: {e}")))?;
-    let mode = listen_mode(&cfg)?;
-    let listener = TcpListener::bind(addr)
+    TcpListener::bind(addr)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(|e| ApiError::internal(e.to_string()))
+}
+
+/// Serve on an already-bound listener.
+pub async fn serve_on(listener: TcpListener, state: AppState) -> Result<(), ApiError> {
+    let cfg = state.config.read().expect("config").clone();
+    let mode = listen_mode(&cfg)?;
     let router = crate::router(state);
     match mode {
         ListenMode::Http => {

@@ -31,5 +31,5 @@ Do not pull `tokio` or network crates onto the RT path.
 
 ## Architecture
 
-- Follow `docs/architecture.md`. Current landed work is PR-01–PR-12. Next planned item is PR-13 (MQTT Sparkplug B telemetry).
+- Follow `docs/architecture.md`. Current landed work is PR-01–PR-14. Next planned item is PR-15 (host compiler ST-subset).
 - Do not invent crates or public APIs that contradict the architecture plan without an explicit design change.

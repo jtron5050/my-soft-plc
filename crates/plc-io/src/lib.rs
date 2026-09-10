@@ -15,7 +15,7 @@ mod scale;
 mod value;
 
 pub use double_buffer::{DoubleBuffer, Snapshot};
-pub use driver::{DriverDiag, InputUpdate, IoDriver, OutputImage};
+pub use driver::{DriverDiag, InputInjector, InputUpdate, IoDriver, OutputImage};
 pub use error::IoError;
 pub use force::{
     resolve_effective_output, EffectiveOutputInput, EffectiveSource, ForceOverlay, ForceTable,

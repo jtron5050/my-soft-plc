@@ -42,20 +42,6 @@ impl FromRequestParts<AppState> for UploadPermit {
     }
 }
 
-/// Snapshot current/armed ids under the runtime mutex, then write pointer
-/// files after the lock is dropped.
-fn sync_program_pointers(state: &AppState) {
-    let (current, armed) = {
-        let rt = state.runtime.lock().expect("runtime");
-        (
-            rt.current_info().map(|p| p.id.clone()),
-            rt.armed_info().map(|p| p.id.clone()),
-        )
-    };
-    let _ = state.store.set_pointer("current", current.as_deref());
-    let _ = state.store.set_pointer("armed", armed.as_deref());
-}
-
 /// `GET /api/v1/programs`.
 pub async fn list(
     State(state): State<AppState>,
@@ -188,7 +174,7 @@ pub async fn arm(
             }
         }
     };
-    sync_program_pointers(&state);
+    state.sync_program_pointers();
     state.record(
         &authed.principal.id,
         AuditAction::ProgramArm,
@@ -275,7 +261,7 @@ pub async fn activate(
     );
     match outcome {
         ActivateRequest::NoOp => {
-            sync_program_pointers(&state);
+            state.sync_program_pointers();
             Ok((
                 StatusCode::OK,
                 Json(serde_json::json!({
@@ -293,11 +279,13 @@ pub async fn activate(
             });
             if let Some(wait_ms) = q.wait_ms.filter(|n| *n > 0) {
                 if wait_for_idle(&state, wait_ms).await {
-                    sync_program_pointers(&state);
+                    state.sync_program_pointers();
                     let body = build_status(&state);
                     return Ok((StatusCode::OK, Json(body)).into_response());
                 }
             }
+            // 202 returns before T1 finishes the swap; persist current/armed once idle.
+            spawn_sync_pointers_when_idle(state.clone());
             Ok((
                 StatusCode::ACCEPTED,
                 Json(ActivateAccepted {
@@ -310,15 +298,34 @@ pub async fn activate(
     }
 }
 
+fn activate_settled(rt: &plc_runtime::Runtime) -> bool {
+    rt.phase() != Phase::Swapping
+        && (rt.phase() == Phase::Idle || rt.current_info().is_some())
+        && rt.armed_info().is_none()
+}
+
+fn spawn_sync_pointers_when_idle(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            let settled = {
+                let rt = state.runtime.lock().expect("runtime");
+                activate_settled(&rt)
+            };
+            if settled {
+                state.sync_program_pointers();
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    });
+}
+
 async fn wait_for_idle(state: &AppState, wait_ms: u64) -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(wait_ms);
     loop {
         {
             let rt = state.runtime.lock().expect("runtime");
-            if rt.phase() != Phase::Swapping
-                && (rt.phase() == Phase::Idle || rt.current_info().is_some())
-                && rt.armed_info().is_none()
-            {
+            if activate_settled(&rt) {
                 return true;
             }
         }

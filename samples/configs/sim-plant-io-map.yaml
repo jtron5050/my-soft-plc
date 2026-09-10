@@ -1,0 +1,38 @@
+# SIM plant process image (PR-14). Slot order is binding order.
+# Must match samples/programs/demo-conveyor/fixture.spasm header counts.
+version: 1
+modules:
+  - id: sim_line
+    driver: sim
+    on_bad_quality: force_safe
+    bindings:
+      - tag: Conveyor1/StartCmd
+        image: I
+        type: BOOL
+      - tag: Conveyor1/StopCmd
+        image: I
+        type: BOOL
+      - tag: Conveyor1/PullCordOK
+        image: I
+        type: BOOL
+      - tag: Conveyor1/BeltSlipOK
+        image: I
+        type: BOOL
+      - tag: Conveyor1/ChuteBlocked
+        image: I
+        type: BOOL
+      - tag: Conveyor1/LocalMode
+        image: I
+        type: BOOL
+      - tag: Conveyor1/RunFwd
+        image: Q
+        type: BOOL
+        safe_state: false
+      - tag: Conveyor1/Fault
+        image: Q
+        type: BOOL
+        safe_state: false
+      - tag: Conveyor1/Ready
+        image: Q
+        type: BOOL
+        safe_state: false
