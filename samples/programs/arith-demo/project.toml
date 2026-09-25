@@ -1,0 +1,27 @@
+id = "arith-demo"
+version = "0.1.0"
+build_id = "fixture"
+restart_policy = "safe_reset"
+sources = ["src/main.st"]
+
+[[task]]
+name = "main"
+program = "Main"
+
+[[tag]]
+name = "I0"
+kind = "I"
+type = "BOOL"
+slot = 0
+
+[[tag]]
+name = "I1"
+kind = "I"
+type = "BOOL"
+slot = 1
+
+[[tag]]
+name = "Q0"
+kind = "Q"
+type = "BOOL"
+slot = 0

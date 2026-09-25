@@ -1,0 +1,9 @@
+id = "rs-latch"
+version = "0.1.0"
+build_id = "fixture"
+restart_policy = "safe_reset"
+sources = ["src/rs.st"]
+
+[[task]]
+name = "main"
+program = "Main"

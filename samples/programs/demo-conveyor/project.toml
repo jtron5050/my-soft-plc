@@ -1,0 +1,78 @@
+id = "demo-conveyor"
+version = "0.1.0"
+build_id = "st"
+restart_policy = "safe_reset"
+libs = ["../../../libs/materials-common"]
+sources = ["src/main.st"]
+
+[[task]]
+name = "fast"
+program = "Fast"
+
+[[task]]
+name = "main"
+program = "Main"
+
+[[task]]
+name = "slow"
+program = "Slow"
+
+[[tag]]
+name = "Conveyor1/StartCmd"
+kind = "I"
+type = "BOOL"
+slot = 0
+
+[[tag]]
+name = "Conveyor1/StopCmd"
+kind = "I"
+type = "BOOL"
+slot = 1
+
+[[tag]]
+name = "Conveyor1/PullCordOK"
+kind = "I"
+type = "BOOL"
+slot = 2
+
+[[tag]]
+name = "Conveyor1/BeltSlipOK"
+kind = "I"
+type = "BOOL"
+slot = 3
+
+[[tag]]
+name = "Conveyor1/ChuteBlocked"
+kind = "I"
+type = "BOOL"
+slot = 4
+
+[[tag]]
+name = "Conveyor1/LocalMode"
+kind = "I"
+type = "BOOL"
+slot = 5
+
+[[tag]]
+name = "Conveyor1/RunFwd"
+kind = "Q"
+type = "BOOL"
+slot = 0
+
+[[tag]]
+name = "Conveyor1/Fault"
+kind = "Q"
+type = "BOOL"
+slot = 1
+
+[[tag]]
+name = "Conveyor1/Ready"
+kind = "Q"
+type = "BOOL"
+slot = 2
+
+[[tag]]
+name = "Conveyor1/RunHours"
+kind = "R"
+type = "REAL"
+offset = 0
