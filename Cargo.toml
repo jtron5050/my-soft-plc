@@ -12,6 +12,7 @@ members = [
     "crates/plc-scan",
     "crates/plc-retain",
     "crates/plc-package",
+    "crates/plc-compiler",
     "crates/plc-runtime",
     "crates/plc-api",
     "crates/plc-telemetry",
@@ -43,6 +44,7 @@ plc-vm = { path = "crates/plc-vm", version = "0.1.0" }
 plc-scan = { path = "crates/plc-scan", version = "0.1.0" }
 plc-retain = { path = "crates/plc-retain", version = "0.1.0" }
 plc-package = { path = "crates/plc-package", version = "0.1.0" }
+plc-compiler = { path = "crates/plc-compiler", version = "0.1.0" }
 plc-runtime = { path = "crates/plc-runtime", version = "0.1.0" }
 plc-api = { path = "crates/plc-api", version = "0.1.0" }
 plc-telemetry = { path = "crates/plc-telemetry", version = "0.1.0" }
@@ -50,6 +52,7 @@ soft-plc-runtime = { path = "crates/soft-plc-runtime", version = "0.1.0" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
+toml = "0.8"
 thiserror = "2.0"
 ed25519-dalek = { version = "2.1", features = ["std"] }
 sha2 = "0.10"

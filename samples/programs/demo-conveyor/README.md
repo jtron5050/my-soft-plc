@@ -1,6 +1,11 @@
 # demo-conveyor
 
-Checked-in IR fixtures for the SIM plant demo (architecture PR-14). **Not** compiled from ST; PR-15 must round-trip this spasm.
+SIM plant demo (architecture PR-14/PR-15).
+
+| Artifact | Role |
+|----------|------|
+| `fixture.spasm` / `fixture.spkg` | Hand-written IR oracle (PR-14 runtime default) |
+| `src/main.st` + `project.toml` | Appendix B ST sources (PR-15) |
 
 | Slot | Tag | Plane |
 |------|-----|-------|
@@ -15,4 +20,8 @@ Checked-in IR fixtures for the SIM plant demo (architecture PR-14). **Not** comp
 | Q2 | `Conveyor1/Ready` | `%Q` |
 | R0 | `Conveyor1/RunHours` | retain REAL |
 
-`fixture.spasm` is the review oracle. `fixture.spkg` is the unsigned packed package; `cargo test -p plc-runtime demo_conveyor_spkg_matches_spasm` checks they match.
+```bash
+cargo run -p plc-compiler -- compile samples/programs/demo-conveyor/project.toml -o /tmp/demo-conveyor.spkg
+cargo test -p plc-compiler --test compile_samples
+cargo test -p plc-runtime demo_conveyor_spkg_matches_spasm
+```

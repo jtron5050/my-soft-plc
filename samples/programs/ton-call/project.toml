@@ -1,0 +1,9 @@
+id = "ton-call"
+version = "0.1.0"
+build_id = "fixture"
+restart_policy = "safe_reset"
+sources = ["src/main.st"]
+
+[[task]]
+name = "main"
+program = "Main"
