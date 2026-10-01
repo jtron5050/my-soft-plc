@@ -864,6 +864,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "plc-io-modbus"
+version = "0.1.0"
+dependencies = [
+ "plc-io",
+ "plc-types",
+ "serde",
+ "serde_yaml",
+]
+
+[[package]]
 name = "plc-io-sim"
 version = "0.1.0"
 dependencies = [
@@ -1346,6 +1356,7 @@ dependencies = [
  "plc-api",
  "plc-config",
  "plc-io",
+ "plc-io-modbus",
  "plc-io-sim",
  "plc-package",
  "plc-retain",

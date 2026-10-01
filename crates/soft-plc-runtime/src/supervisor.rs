@@ -1,5 +1,6 @@
 //! T0 supervisor: scan thread, REST, MQTT, retain flusher.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,7 +9,8 @@ use std::time::Duration;
 
 use plc_api::{bind_listener, serve_on, AppState};
 use plc_config::{DeviceConfig, ProfileKind};
-use plc_io::IoMap;
+use plc_io::{FieldGate, IoDriver, IoMap};
+use plc_io_modbus::{validate_map, ModbusBridge};
 use plc_io_sim::SharedSim;
 use plc_retain::RetainStore;
 use plc_runtime::{spawn_scan_thread, Runtime, RuntimeConfig};
@@ -18,6 +20,7 @@ use plc_types::ProgramPhase;
 use tokio::net::TcpListener;
 
 use crate::error::AppError;
+use crate::io_route::RoutedDriver;
 
 /// Running process handles.
 pub struct Supervisor {
@@ -39,7 +42,6 @@ impl Supervisor {
         program: Option<PathBuf>,
         mode: Option<&str>,
     ) -> Result<Self, AppError> {
-        refuse_field_drivers(&cfg)?;
         if cfg.profile == ProfileKind::Dev {
             tracing::warn!(
                 "profile=dev allows unsigned packages and plaintext HTTP; not for plant networks"
@@ -51,11 +53,24 @@ impl Supervisor {
         fs::create_dir_all(&cfg.paths.audit).map_err(AppError::from)?;
 
         let io_map_path = resolve_path(config_path.as_deref(), &cfg.paths.io_map);
-        let image = IoMap::load_from_path(&io_map_path)?.build_image()?;
+        let map = IoMap::load_from_path(&io_map_path)?;
+        check_io_drivers(&cfg, &map)?;
+        let resolved = map.resolve()?;
+        let plan = validate_map(&map, &resolved)?;
+        let image = resolved.image.clone();
         let n_i = image.inputs.len();
         let n_q = image.outputs.len();
         let sim = SharedSim::new("sim", n_i, n_q);
-        let io = plc_scan::ScanIo::new(image, Box::new(sim.clone()));
+        let (driver, field_gate): (Box<dyn IoDriver>, Option<Arc<FieldGate>>) =
+            if plan.modules.is_empty() {
+                (Box::new(sim.clone()), None)
+            } else {
+                let gate = Arc::new(FieldGate::new());
+                let bridge = ModbusBridge::new(plan, Arc::clone(&gate));
+                (Box::new(RoutedDriver::new(sim.clone(), bridge)), Some(gate))
+            };
+        let mut io = plc_scan::ScanIo::new(image, driver);
+        io.field_gate = field_gate;
         let plan = ScanPlan::from_config(&cfg).map_err(|e| AppError::config(e.to_string()))?;
         let mut rt = Runtime::new(
             plan,
@@ -279,13 +294,36 @@ impl Drop for Supervisor {
     }
 }
 
-fn refuse_field_drivers(cfg: &DeviceConfig) -> Result<(), AppError> {
-    for d in &cfg.io.drivers {
-        if d != "sim" {
+fn check_io_drivers(cfg: &DeviceConfig, map: &IoMap) -> Result<(), AppError> {
+    for driver in &cfg.io.drivers {
+        if driver == "gpio" {
+            return Err(AppError::config(
+                "gpio is PR-17 (this runtime accepts io.drivers sim and modbus_tcp)",
+            ));
+        }
+        if driver != "sim" && driver != "modbus_tcp" {
             return Err(AppError::config(format!(
-                "PR-14 runtime only supports io.drivers=sim (got '{d}'; gpio/modbus are later PRs)"
+                "unsupported io.drivers entry '{driver}'"
             )));
         }
+    }
+    let enabled: BTreeSet<&str> = cfg.io.drivers.iter().map(String::as_str).collect();
+    let mut modbus_modules = 0usize;
+    for module in &map.modules {
+        if !enabled.contains(module.driver.as_str()) {
+            return Err(AppError::config(format!(
+                "io-map module '{}' uses driver '{}' which is not listed in io.drivers",
+                module.id, module.driver
+            )));
+        }
+        if module.driver == "modbus_tcp" {
+            modbus_modules += 1;
+        }
+    }
+    if enabled.contains("modbus_tcp") && modbus_modules == 0 {
+        return Err(AppError::config(
+            "io.drivers includes modbus_tcp but the io-map has no modbus_tcp module",
+        ));
     }
     Ok(())
 }

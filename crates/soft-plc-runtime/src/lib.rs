@@ -4,6 +4,7 @@
 
 mod cli;
 mod error;
+mod io_route;
 mod supervisor;
 
 pub use cli::Args;

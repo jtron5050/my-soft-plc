@@ -1,0 +1,29 @@
+# Modbus TCP rack (PR-16). 5-digit Modicon references: 40001 is holding PDU 0.
+# Not used by the SIM demo. sim-plant.yaml stays on the sim driver.
+version: 1
+modules:
+  - id: remote_rack_a
+    driver: modbus_tcp
+    config:
+      endpoint: "192.168.10.20:502"
+      unit: 1
+      poll_ms: 50
+      stale_ms: 150
+    on_bad_quality: force_safe
+    bindings:
+      - tag: Silo1.Level_eu
+        image: I
+        type: REAL
+        register: 40001
+        register_type: holding
+        raw_type: INT
+        scale: 0.1
+        offset: 0.0
+        clamp: [0.0, 100.0]
+        unit: "pct"
+      - tag: Silo1.DumpGate
+        image: Q
+        type: BOOL
+        register: 1
+        register_type: coil
+        safe_state: false

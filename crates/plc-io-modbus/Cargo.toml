@@ -1,0 +1,19 @@
+[package]
+name = "plc-io-modbus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Modbus TCP I/O driver (non-RT poll worker)"
+readme = "README.md"
+
+[dependencies]
+plc-io = { workspace = true }
+plc-types = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+
+[lints]
+workspace = true

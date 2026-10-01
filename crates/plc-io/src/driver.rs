@@ -3,6 +3,7 @@
 use plc_types::Quality;
 
 use crate::error::IoError;
+use crate::map::BadQualityPolicy;
 use crate::value::PlcValue;
 
 /// Input poll result filled by [`IoDriver::poll_inputs`].
@@ -35,6 +36,19 @@ pub struct OutputImage {
     pub values: Vec<PlcValue>,
     /// When true, driver must drive safe/de-energized states.
     pub force_safe: bool,
+}
+
+/// Per-output module quality used when a driver opts into slot-level force policy.
+///
+/// The scan engine prefills this with the aggregate module quality. A driver that
+/// returns `true` from [`IoDriver::fill_output_module_state`] overwrites the slots
+/// it owns; other slots keep the prefilled aggregate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputModuleState {
+    /// Quality of the module that owns this `%Q` slot.
+    pub quality: Quality,
+    /// That module's `on_bad_quality` policy.
+    pub on_bad_quality: BadQualityPolicy,
 }
 
 /// Lightweight driver diagnostics.
@@ -79,6 +93,15 @@ pub trait IoDriver: Send {
 
     /// Diagnostics snapshot.
     fn diagnostics(&self) -> DriverDiag;
+
+    /// Overwrite per-output module quality.
+    ///
+    /// `into` is prefilled with the scan aggregate. Return `true` after editing
+    /// owned slots. The default returns `false` and leaves the aggregate in force
+    /// for every output (simulation driver).
+    fn fill_output_module_state(&self, _into: &mut [OutputModuleState]) -> bool {
+        false
+    }
 }
 
 /// Non-RT handle for injecting process-image inputs (SIM / tests).

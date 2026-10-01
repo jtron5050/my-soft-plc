@@ -50,6 +50,11 @@ impl IoMap {
     /// PR-14: a single `sim` module is 1:1 with image slots. Later drivers reuse
     /// the same layout builder.
     pub fn build_image(&self) -> Result<ProcessImage, IoError> {
+        Ok(self.resolve()?.image)
+    }
+
+    /// Same layout as [`Self::build_image`], plus the slot assigned to each binding.
+    pub fn resolve(&self) -> Result<ResolvedIoMap, IoError> {
         let mut inputs: Vec<Option<SlotBuild>> = Vec::new();
         let mut outputs: Vec<Option<SlotBuild>> = Vec::new();
         let mut memory: Vec<Option<SlotBuild>> = Vec::new();
@@ -57,8 +62,9 @@ impl IoMap {
         let mut next_q = 0u32;
         let mut next_m = 0u32;
         let mut names = BTreeSet::new();
+        let mut bindings = Vec::new();
 
-        for module in &self.modules {
+        for (module_index, module) in self.modules.iter().enumerate() {
             if module.id.trim().is_empty() {
                 return Err(IoError::Map("module.id must be non-empty".into()));
             }
@@ -68,7 +74,7 @@ impl IoMap {
                     module.id
                 )));
             }
-            for b in &module.bindings {
+            for (binding_index, b) in module.bindings.iter().enumerate() {
                 if b.tag.trim().is_empty() {
                     return Err(IoError::Map(format!(
                         "module '{}': binding tag must be non-empty",
@@ -115,26 +121,63 @@ impl IoMap {
                     unit: b.unit.clone(),
                     safe,
                 });
+                bindings.push(ResolvedBinding {
+                    module_index,
+                    module_id: module.id.clone(),
+                    driver: module.driver.clone(),
+                    binding_index,
+                    slot,
+                    image: b.image,
+                });
             }
         }
 
-        Ok(ProcessImage {
-            inputs: fill_slots(&inputs),
-            outputs: fill_slots(&outputs),
-            memory: fill_slots(&memory),
-            input_meta: fill_meta(&inputs, "I"),
-            output_meta: fill_meta(&outputs, "Q"),
-            memory_meta: fill_meta(&memory, "M"),
-            output_safe: outputs
-                .iter()
-                .map(|s| {
-                    s.as_ref()
-                        .and_then(|b| b.safe)
-                        .unwrap_or(PlcValue::Bool(false))
-                })
-                .collect(),
+        Ok(ResolvedIoMap {
+            image: ProcessImage {
+                inputs: fill_slots(&inputs),
+                outputs: fill_slots(&outputs),
+                memory: fill_slots(&memory),
+                input_meta: fill_meta(&inputs, "I"),
+                output_meta: fill_meta(&outputs, "Q"),
+                memory_meta: fill_meta(&memory, "M"),
+                output_safe: outputs
+                    .iter()
+                    .map(|s| {
+                        s.as_ref()
+                            .and_then(|b| b.safe)
+                            .unwrap_or(PlcValue::Bool(false))
+                    })
+                    .collect(),
+            },
+            bindings,
         })
     }
+}
+
+/// One binding after slot assignment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedBinding {
+    /// Index into [`IoMap::modules`].
+    pub module_index: usize,
+    /// Module id copied from the map.
+    pub module_id: String,
+    /// Driver kind (`sim`, `modbus_tcp`, …).
+    pub driver: String,
+    /// Index into that module's `bindings`.
+    pub binding_index: usize,
+    /// Assigned process-image slot.
+    pub slot: u32,
+    /// Plane this slot belongs to.
+    pub image: ImagePlane,
+}
+
+/// Process image plus the slot chosen for every binding.
+#[derive(Debug, Clone)]
+pub struct ResolvedIoMap {
+    /// Allocated `%I` / `%Q` / `%M` image.
+    pub image: ProcessImage,
+    /// Bindings in map order.
+    pub bindings: Vec<ResolvedBinding>,
 }
 
 #[derive(Clone)]
@@ -428,5 +471,37 @@ modules:
         assert_eq!(image.input_meta[5].tag, "Conveyor1/LocalMode");
         assert_eq!(image.output_meta[0].tag, "Conveyor1/RunFwd");
         assert_eq!(image.output_meta[2].tag, "Conveyor1/Ready");
+    }
+
+    #[test]
+    fn resolves_modbus_rack_golden() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../samples/configs/modbus-rack-io-map.yaml");
+        let map = IoMap::load_from_path(&path).expect("modbus-rack-io-map.yaml");
+        let resolved = map.resolve().unwrap();
+        assert_eq!(resolved.image.inputs.len(), 1);
+        assert_eq!(resolved.image.outputs.len(), 1);
+        assert_eq!(resolved.image.input_meta[0].tag, "Silo1.Level_eu");
+        assert_eq!(resolved.image.input_meta[0].ty, ValueType::Real);
+        assert_eq!(resolved.image.input_meta[0].unit, "pct");
+        assert_eq!(resolved.image.output_meta[0].tag, "Silo1.DumpGate");
+        assert_eq!(resolved.image.output_safe[0], PlcValue::Bool(false));
+        assert_eq!(map.modules[0].driver, "modbus_tcp");
+        assert_eq!(map.modules[0].on_bad_quality, BadQualityPolicy::ForceSafe);
+        let level = &map.modules[0].bindings[0];
+        assert!((level.scale - 0.1).abs() < 1e-12);
+        assert!(level.offset.abs() < 1e-12);
+        let [lo, hi] = level.clamp.expect("clamp");
+        assert!(lo.abs() < 1e-12);
+        assert!((hi - 100.0).abs() < 1e-12);
+        assert_eq!(level.register, Some(40_001));
+        assert_eq!(level.register_type, Some(RegisterType::Holding));
+        assert_eq!(level.raw_type, Some(RawType::Int));
+        assert_eq!(resolved.bindings.len(), 2);
+        assert_eq!(resolved.bindings[0].slot, 0);
+        assert_eq!(resolved.bindings[0].image, ImagePlane::I);
+        assert_eq!(resolved.bindings[1].slot, 0);
+        assert_eq!(resolved.bindings[1].image, ImagePlane::Q);
+        assert_eq!(resolved.bindings[0].module_id, "remote_rack_a");
     }
 }
