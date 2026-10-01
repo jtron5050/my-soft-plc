@@ -8,6 +8,7 @@
 mod double_buffer;
 mod driver;
 mod error;
+mod field_gate;
 mod force;
 mod image;
 mod map;
@@ -15,15 +16,18 @@ mod scale;
 mod value;
 
 pub use double_buffer::{DoubleBuffer, Snapshot};
-pub use driver::{DriverDiag, InputInjector, InputUpdate, IoDriver, OutputImage};
+pub use driver::{
+    DriverDiag, InputInjector, InputUpdate, IoDriver, OutputImage, OutputModuleState,
+};
 pub use error::IoError;
+pub use field_gate::FieldGate;
 pub use force::{
     resolve_effective_output, EffectiveOutputInput, EffectiveSource, ForceOverlay, ForceTable,
 };
 pub use image::{ProcessImage, SlotMeta, TypedSlot};
 pub use map::{
     BadQualityPolicy, BindingDirection, ImagePlane, IoBinding, IoMap, IoModule, RawType,
-    RegisterType, ValueType,
+    RegisterType, ResolvedBinding, ResolvedIoMap, ValueType,
 };
 pub use scale::{apply_scale_offset_clamp, eng_to_raw};
 pub use value::PlcValue;

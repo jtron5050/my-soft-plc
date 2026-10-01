@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use plc_config::{DeviceConfig, StopOutputPolicy};
 use plc_io::{
-    resolve_effective_output, BadQualityPolicy, DoubleBuffer, EffectiveOutputInput, ForceTable,
-    InputUpdate, IoDriver, OutputImage, PlcValue, ProcessImage, TypedSlot,
+    resolve_effective_output, BadQualityPolicy, DoubleBuffer, EffectiveOutputInput, FieldGate,
+    ForceTable, InputUpdate, IoDriver, OutputImage, OutputModuleState, PlcValue, ProcessImage,
+    TypedSlot,
 };
 use plc_types::{OperatingMode, ProgramPhase, Quality};
 use plc_vm::Vm;
@@ -146,6 +147,8 @@ pub struct ScanIo {
     pub module_quality: Quality,
     /// Policy when module quality is Bad.
     pub on_bad_quality: BadQualityPolicy,
+    /// Optional mode mirror for non-RT field workers. `None` for sim-only scans.
+    pub field_gate: Option<Arc<FieldGate>>,
 }
 
 impl ScanIo {
@@ -159,6 +162,7 @@ impl ScanIo {
             forces: ForceTable::new(),
             module_quality: Quality::Good,
             on_bad_quality: BadQualityPolicy::ForceSafe,
+            field_gate: None,
         }
     }
 
@@ -211,6 +215,7 @@ pub struct ScanEngine {
     schedule_order: Vec<usize>,
     input_scratch: InputUpdate,
     output_image: OutputImage,
+    output_slot_state: Vec<OutputModuleState>,
     first_run_complete: bool,
     min_duration_us: Vec<u64>,
     last_ran: Option<usize>,
@@ -311,6 +316,13 @@ impl ScanEngine {
                 values: output_values,
                 force_safe: true,
             },
+            output_slot_state: vec![
+                OutputModuleState {
+                    quality: Quality::Good,
+                    on_bad_quality: BadQualityPolicy::ForceSafe,
+                };
+                n_q
+            ],
             first_run_complete: false,
             last_ran: None,
             armed: None,
@@ -817,7 +829,14 @@ impl ScanEngine {
         duration_us
     }
 
+    fn publish_field_mode(&self) {
+        if let Some(gate) = &self.io.field_gate {
+            gate.set_mode(self.mode());
+        }
+    }
+
     fn sample_inputs(&mut self) {
+        self.publish_field_mode();
         if let Some(db) = self.io.remote_inputs.clone() {
             let snap = db.read(8);
             for (i, (v, q)) in snap.values.iter().zip(snap.quality.iter()).enumerate() {
@@ -903,6 +922,7 @@ impl ScanEngine {
     }
 
     fn apply_outputs(&mut self, ran_logic_ok: bool) {
+        self.publish_field_mode();
         let mode = self.mode();
         let startup_hold = !self.first_run_complete && !ran_logic_ok;
         let stop_safe =
@@ -910,6 +930,21 @@ impl ScanEngine {
         let global_force_safe = mode == OperatingMode::Fault || stop_safe || startup_hold;
 
         let n_q = self.io.image.outputs.len();
+        self.output_slot_state.resize(
+            n_q,
+            OutputModuleState {
+                quality: Quality::Good,
+                on_bad_quality: BadQualityPolicy::ForceSafe,
+            },
+        );
+        for state in &mut self.output_slot_state {
+            state.quality = self.io.module_quality;
+            state.on_bad_quality = self.io.on_bad_quality;
+        }
+        let per_slot = self
+            .io
+            .driver
+            .fill_output_module_state(&mut self.output_slot_state);
         self.output_image.values.clear();
         for i in 0..n_q {
             let slot = self
@@ -926,11 +961,19 @@ impl ScanEngine {
                 .get(i)
                 .copied()
                 .unwrap_or(plc_io::PlcValue::Bool(false));
+            let (module_quality, on_bad_quality) = if per_slot {
+                (
+                    self.output_slot_state[i].quality,
+                    self.output_slot_state[i].on_bad_quality,
+                )
+            } else {
+                (self.io.module_quality, self.io.on_bad_quality)
+            };
             let (v, _) = resolve_effective_output(EffectiveOutputInput {
                 mode,
                 global_force_safe,
-                module_quality: self.io.module_quality,
-                on_bad_quality: self.io.on_bad_quality,
+                module_quality,
+                on_bad_quality,
                 force: self.io.forces.get(i as u32),
                 program_value: slot.value,
                 program_written: slot.written,
