@@ -1,4 +1,4 @@
-//! Scan status snapshots for REST / diagnostics (PR-12, scan stats in PR-18).
+//! Per-task scan snapshots (last, max, average, raw histogram buckets) for REST and Prometheus.
 
 use plc_types::{OperatingMode, ProgramPhase};
 

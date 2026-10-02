@@ -110,11 +110,14 @@ impl AppState {
 
     /// Copy scan edges into the diagnostics ring. Counters stay on the scan thread.
     pub fn poll_scan_diagnostics(&self) {
+        // Cover the status copy with the cursor lock. The interval task,
+        // `/metrics`, and `/diagnostics/events` poll concurrently; a copy taken
+        // before the lock can be committed after a newer one and rewind edges.
+        let mut cursor = self.diag_cursor.lock().expect("diag cursor");
         let snap = {
             let rt = self.runtime.lock().expect("runtime");
             rt.engine().status()
         };
-        let mut cursor = self.diag_cursor.lock().expect("diag cursor");
         let unix = self.unix_secs();
         if snap.mode == OperatingMode::Fault && cursor.mode != OperatingMode::Fault {
             self.events.push(unix, "fault", "mode=FAULT");
@@ -122,6 +125,7 @@ impl AppState {
         if snap.io_degraded && !cursor.io_degraded {
             self.events.push(unix, "io_degraded", "quality=Bad");
         }
+        let mut overruns = Vec::with_capacity(snap.tasks.len());
         for task in &snap.tasks {
             let prev = cursor
                 .overruns
@@ -136,14 +140,12 @@ impl AppState {
                     format!("task={} delta={delta}", task.name),
                 );
             }
+            // Lifetime counts only move forward. A lower sample must not rewind.
+            overruns.push((task.name.clone(), task.overruns.max(prev)));
         }
         cursor.mode = snap.mode;
         cursor.io_degraded = snap.io_degraded;
-        cursor.overruns = snap
-            .tasks
-            .iter()
-            .map(|task| (task.name.clone(), task.overruns))
-            .collect();
+        cursor.overruns = overruns;
     }
 
     /// Append audit + diagnostics.

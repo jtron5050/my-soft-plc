@@ -1,7 +1,7 @@
 //! Append-only audit log. Rotates at 16 MiB and keeps 8 files.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -14,6 +14,10 @@ pub const AUDIT_MAX_BYTES: u64 = 16 * 1024 * 1024;
 pub const AUDIT_MAX_FILES: usize = 8;
 
 const ACTIVE_NAME: &str = "audit.jsonl";
+const INCOMING_NAME: &str = "audit.jsonl.new";
+const DROPPING_NAME: &str = "audit.jsonl.dropping";
+/// Tail window used to learn a segment's last sequence without reading it all.
+const TAIL_WINDOW: u64 = 64 * 1024;
 
 /// One persisted audit row (export and tests).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +66,7 @@ impl RotatingAudit {
         let max_files = max_files.max(2);
         let max_bytes = max_bytes.max(1);
         fs::create_dir_all(&dir)?;
+        recover_incomplete_rotate(&dir, max_files)?;
         let active_path = dir.join(ACTIVE_NAME);
         let len = repair_torn_tail(&active_path)?;
         let next_seq = max_seq(&dir, max_files)?.saturating_add(1);
@@ -83,17 +88,32 @@ impl RotatingAudit {
 
     /// Rows with `seq > cursor`, oldest first.
     pub fn page(&self, cursor: u64, limit: usize) -> io::Result<Vec<AuditRecord>> {
-        let _guard = self.inner.lock().expect("audit log");
-        let mut out = Vec::new();
         if limit == 0 {
-            return Ok(out);
+            return Ok(Vec::new());
         }
-        for path in files_oldest_first(&self.dir, self.max_files) {
-            let text = match fs::read_to_string(&path) {
-                Ok(text) => text,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e),
-            };
+        // Open the segments, then release the writer lock before reading.
+        let mut files = {
+            let _guard = self.inner.lock().expect("audit log");
+            let mut opened = Vec::new();
+            for path in files_oldest_first(&self.dir, self.max_files) {
+                match File::open(&path) {
+                    Ok(file) => opened.push(file),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                    Err(e) => return Err(e),
+                }
+            }
+            opened
+        };
+        let mut out = Vec::new();
+        for file in &mut files {
+            if let Some(last) = trailing_seq(file)? {
+                if last <= cursor {
+                    continue;
+                }
+            }
+            file.seek(SeekFrom::Start(0))?;
+            let mut text = String::new();
+            file.read_to_string(&mut text)?;
             for line in text.lines() {
                 if line.is_empty() {
                     continue;
@@ -133,37 +153,55 @@ impl RotatingAudit {
         if inner.len > 0 && inner.len.saturating_add(add) > self.max_bytes {
             self.rotate(&mut inner)?;
         }
+        let start = inner.len;
+        let path = self.dir.join(ACTIVE_NAME);
         let file = inner
             .file
             .as_mut()
             .ok_or_else(|| io::Error::other("audit file closed"))?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        inner.len = inner.len.saturating_add(add);
+        // Advance only after the line is the readable tail. A failed write
+        // truncates back to `start` so the next record can reuse `seq`.
+        commit_line(&path, file, start, &bytes)?;
+        inner.len = start.saturating_add(add);
         inner.next_seq = inner.next_seq.saturating_add(1);
         Ok(())
     }
 
     fn rotate(&self, inner: &mut ActiveFile) -> io::Result<()> {
-        if let Some(file) = inner.file.take() {
-            file.sync_all()?;
-        }
+        let current = inner
+            .file
+            .as_ref()
+            .ok_or_else(|| io::Error::other("audit file closed"))?;
+        current.sync_all()?;
+
+        let incoming_path = self.dir.join(INCOMING_NAME);
+        let dropping = self.dir.join(DROPPING_NAME);
         let oldest = self.max_files - 1;
-        let _ = fs::remove_file(self.dir.join(rotated_name(oldest)));
-        for i in (1..oldest).rev() {
-            let from = self.dir.join(rotated_name(i));
-            if from.exists() {
-                fs::rename(&from, self.dir.join(rotated_name(i + 1)))?;
-            }
+
+        // Replacement exists before any name moves, so a later failure can
+        // leave the current handle on `audit.jsonl`. Append and truncate
+        // together are EINVAL, so empty the path first, then open append-only.
+        if incoming_path.exists() {
+            fs::remove_file(&incoming_path)?;
         }
-        let active = self.dir.join(ACTIVE_NAME);
-        if active.exists() {
-            fs::rename(&active, self.dir.join(rotated_name(1)))?;
+        let incoming = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&incoming_path)?;
+        incoming.sync_all()?;
+
+        if let Err(err) = shift_segments(&self.dir, oldest) {
+            abort_rotate(&self.dir, oldest);
+            return Err(err);
         }
-        let file = OpenOptions::new().create(true).append(true).open(&active)?;
-        inner.file = Some(file);
+
+        // Names already point at the new active inode. Publish the handle
+        // before directory sync so a sync error cannot keep appending into
+        // the segment that was just rotated away.
+        inner.file = Some(incoming);
         inner.len = 0;
         sync_dir(&self.dir)?;
+        let _ = fs::remove_file(&dropping);
         Ok(())
     }
 }
@@ -209,22 +247,165 @@ fn files_oldest_first(dir: &Path, max_files: usize) -> Vec<PathBuf> {
     paths
 }
 
-/// Drop a trailing partial line so the next append stays valid JSONL.
+fn shift_segments(dir: &Path, oldest: usize) -> io::Result<()> {
+    let active = dir.join(ACTIVE_NAME);
+    let incoming = dir.join(INCOMING_NAME);
+    let dropping = dir.join(DROPPING_NAME);
+    let oldest_path = dir.join(rotated_name(oldest));
+    if oldest_path.exists() {
+        if dropping.exists() {
+            fs::remove_file(&dropping)?;
+        }
+        fs::rename(&oldest_path, &dropping)?;
+    }
+    for i in (1..oldest).rev() {
+        let from = dir.join(rotated_name(i));
+        if from.exists() {
+            fs::rename(&from, dir.join(rotated_name(i + 1)))?;
+        }
+    }
+    if active.exists() {
+        fs::rename(&active, dir.join(rotated_name(1)))?;
+    }
+    fs::rename(&incoming, &active)?;
+    Ok(())
+}
+
+fn abort_rotate(dir: &Path, oldest: usize) {
+    let active = dir.join(ACTIVE_NAME);
+    let incoming = dir.join(INCOMING_NAME);
+    let dropping = dir.join(DROPPING_NAME);
+    let oldest_path = dir.join(rotated_name(oldest));
+    if !active.exists() {
+        let _ = fs::rename(dir.join(rotated_name(1)), &active);
+    }
+    if incoming.exists() {
+        let _ = fs::remove_file(&incoming);
+    }
+    if dropping.exists() && !oldest_path.exists() {
+        let _ = fs::rename(&dropping, &oldest_path);
+    }
+}
+
+/// Put a crashed rotate back so the numbered segments match `page`.
+fn recover_incomplete_rotate(dir: &Path, max_files: usize) -> io::Result<()> {
+    let incoming = dir.join(INCOMING_NAME);
+    if incoming.exists() {
+        fs::remove_file(&incoming)?;
+    }
+    let dropping = dir.join(DROPPING_NAME);
+    if !dropping.exists() {
+        return Ok(());
+    }
+    let oldest = dir.join(rotated_name(max_files - 1));
+    if oldest.exists() {
+        fs::remove_file(&dropping)?;
+    } else {
+        fs::rename(&dropping, &oldest)?;
+    }
+    Ok(())
+}
+
+/// Make `bytes` the durable tail at `start`, or put the file back if not.
+fn commit_line(path: &Path, file: &mut File, start: u64, bytes: &[u8]) -> io::Result<()> {
+    if tail_matches(path, start, bytes)? {
+        return Ok(());
+    }
+    rewind_to(file, start)?;
+    if let Err(err) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        if tail_matches(path, start, bytes)? {
+            return Ok(());
+        }
+        rewind_to(file, start)?;
+        return Err(err);
+    }
+    Ok(())
+}
+
+fn rewind_to(file: &mut File, start: u64) -> io::Result<()> {
+    if file.metadata()?.len() != start {
+        file.set_len(start)?;
+        file.sync_all()?;
+    }
+    Ok(())
+}
+
+fn tail_matches(path: &Path, start: u64, bytes: &[u8]) -> io::Result<bool> {
+    let mut reader = match File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let len = reader.metadata()?.len();
+    let add = bytes.len() as u64;
+    if len != start.saturating_add(add) {
+        return Ok(false);
+    }
+    reader.seek(SeekFrom::Start(start))?;
+    let mut buf = vec![0u8; bytes.len()];
+    reader.read_exact(&mut buf)?;
+    Ok(buf == bytes)
+}
+
+/// Drop a trailing partial line by shortening the file. The prefix stays put.
 fn repair_torn_tail(path: &Path) -> io::Result<u64> {
     if !path.exists() {
         return Ok(0);
     }
-    let mut data = fs::read(path)?;
-    if data.is_empty() || data.last() == Some(&b'\n') {
-        return Ok(data.len() as u64);
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    let len = file.metadata()?.len();
+    if len == 0 {
+        return Ok(0);
     }
-    let keep = data
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map_or(0, |i| i + 1);
-    data.truncate(keep);
-    fs::write(path, &data)?;
-    Ok(keep as u64)
+    file.seek(SeekFrom::End(-1))?;
+    let mut last = [0u8; 1];
+    file.read_exact(&mut last)?;
+    if last[0] == b'\n' {
+        return Ok(len);
+    }
+    let keep = prefix_end_before_torn_tail(&mut file, len)?;
+    if keep < len {
+        file.set_len(keep)?;
+        file.sync_all()?;
+    }
+    Ok(keep)
+}
+
+fn prefix_end_before_torn_tail(file: &mut File, len: u64) -> io::Result<u64> {
+    let mut pos = len;
+    let mut buf = [0u8; 8192];
+    while pos > 0 {
+        let window = pos.min(buf.len() as u64);
+        pos -= window;
+        file.seek(SeekFrom::Start(pos))?;
+        file.read_exact(&mut buf[..window as usize])?;
+        if let Some(i) = buf[..window as usize]
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+        {
+            return Ok(pos + i as u64 + 1);
+        }
+    }
+    Ok(0)
+}
+
+fn trailing_seq(file: &mut File) -> io::Result<Option<u64>> {
+    let len = file.metadata()?.len();
+    if len == 0 {
+        return Ok(None);
+    }
+    let window = len.min(TAIL_WINDOW);
+    file.seek(SeekFrom::Start(len - window))?;
+    let mut buf = vec![0u8; window as usize];
+    file.read_exact(&mut buf)?;
+    let text = String::from_utf8_lossy(&buf);
+    let mut max_seq = None;
+    for line in text.lines() {
+        if let Ok(row) = serde_json::from_str::<AuditRecord>(line) {
+            max_seq = Some(row.seq.max(max_seq.unwrap_or(0)));
+        }
+    }
+    Ok(max_seq)
 }
 
 fn max_seq(dir: &Path, max_files: usize) -> io::Result<u64> {
@@ -259,16 +440,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn rotates_keeps_eight_and_reopens_in_seq_order() {
+    fn temp_dir(label: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "plc-audit-{}-{}",
+            "plc-audit-{label}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
                 .as_nanos()
         ));
+        let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn rotates_keeps_eight_and_reopens_in_seq_order() {
+        let dir = temp_dir("rotate");
         let log = RotatingAudit::open_with_limits(&dir, 1, 8).expect("open");
         for i in 0..20 {
             log.record(event(&format!("e{i}")));
@@ -289,6 +476,78 @@ mod tests {
         let after = reopened.page(18, 1000).expect("cursor");
         assert_eq!(after.len(), 2);
         assert_eq!(after[0].seq, 19);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_rotate_keeps_the_active_file_writable() {
+        let dir = temp_dir("rotate-fail");
+        let log = RotatingAudit::open_with_limits(&dir, 1, 8).expect("open");
+        log.record(event("first"));
+        // Oldest slot exists, and the park destination is a directory, so the
+        // shift fails after the replacement file is created and before the
+        // active name moves.
+        fs::write(dir.join("audit.jsonl.7"), b"old\n").expect("oldest");
+        fs::create_dir(dir.join("audit.jsonl.dropping")).expect("park dir");
+        fs::write(dir.join("audit.jsonl.dropping/blocker"), b"x").expect("blocker");
+        log.record(event("second"));
+        fs::remove_file(dir.join("audit.jsonl.dropping/blocker")).expect("clear blocker");
+        fs::remove_dir(dir.join("audit.jsonl.dropping")).expect("clear park");
+        fs::remove_file(dir.join("audit.jsonl.7")).expect("clear oldest");
+        log.record(event("third"));
+        let page = log.page(0, 20).expect("page");
+        assert_eq!(
+            page.iter()
+                .map(|row| row.detail.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "third"]
+        );
+        assert_eq!(page[0].seq, 1);
+        assert_eq!(page[1].seq, 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn repair_drops_only_the_partial_tail() {
+        let dir = temp_dir("repair");
+        let log = RotatingAudit::open_with_limits(&dir, AUDIT_MAX_BYTES, 8).expect("open");
+        log.record(event("keep"));
+        drop(log);
+        let path = dir.join(ACTIVE_NAME);
+        let mut extra = OpenOptions::new().append(true).open(&path).expect("append");
+        extra.write_all(b"{\"seq\":").expect("tear");
+        extra.sync_all().expect("sync tear");
+        drop(extra);
+        let before = fs::read(&path).expect("read torn");
+        let torn = b"{\"seq\":";
+        assert!(before.ends_with(torn));
+        let reopened = RotatingAudit::open_with_limits(&dir, AUDIT_MAX_BYTES, 8).expect("reopen");
+        let page = reopened.page(0, 10).expect("page");
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].detail, "keep");
+        let after = fs::read(&path).expect("read repaired");
+        assert_eq!(after, &before[..before.len() - torn.len()]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn append_cuts_uncommitted_tail_before_the_next_record() {
+        let dir = temp_dir("rollback");
+        let log = RotatingAudit::open_with_limits(&dir, AUDIT_MAX_BYTES, 8).expect("open");
+        log.record(event("one"));
+        let path = dir.join(ACTIVE_NAME);
+        let mut extra = OpenOptions::new().append(true).open(&path).expect("append");
+        extra.write_all(b"TORN").expect("sneak");
+        extra.sync_all().expect("sync sneak");
+        drop(extra);
+        log.record(event("two"));
+        let text = fs::read_to_string(&path).expect("read");
+        assert!(!text.contains("TORN"));
+        let page = log.page(0, 10).expect("page");
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0].seq, 1);
+        assert_eq!(page[1].seq, 2);
+        assert_eq!(page[1].detail, "two");
         let _ = fs::remove_dir_all(&dir);
     }
 }
