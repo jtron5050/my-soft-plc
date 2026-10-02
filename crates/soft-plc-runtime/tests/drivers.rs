@@ -1,4 +1,4 @@
-//! Field-driver gate on boot: Modbus TCP is accepted, GPIO is not.
+//! Field-driver gate on boot: Modbus TCP and GPIO are accepted when the map matches.
 
 use std::path::PathBuf;
 
@@ -26,8 +26,8 @@ fn cfg_with(drivers: &[&str], io_map: &str) -> plc_config::DeviceConfig {
 }
 
 #[tokio::test]
-async fn gpio_is_still_refused() {
-    let cfg = cfg_with(&["gpio"], "samples/configs/sim-plant-io-map.yaml");
+async fn gpio_without_a_module_is_refused() {
+    let cfg = cfg_with(&["sim", "gpio"], "samples/configs/sim-plant-io-map.yaml");
     let err = match Supervisor::boot(
         cfg,
         Some(repo_root().join("samples/configs/sim-plant.yaml")),
@@ -36,10 +36,49 @@ async fn gpio_is_still_refused() {
     )
     .await
     {
-        Ok(_) => panic!("gpio should be refused"),
+        Ok(_) => panic!("gpio with a sim-only map should be refused"),
         Err(err) => err,
     };
-    assert!(err.to_string().contains("PR-17"), "{err}");
+    let text = err.to_string();
+    assert!(text.contains("no gpio module"), "{text}");
+    assert!(!text.contains("PR-17"), "{text}");
+}
+
+#[tokio::test]
+async fn gpio_missing_chip_fails_at_open() {
+    let map_path =
+        std::env::temp_dir().join(format!("soft-plc-gpio-map-{}.yaml", std::process::id()));
+    std::fs::write(
+        &map_path,
+        r#"
+version: 1
+modules:
+  - id: local_di_1
+    driver: gpio
+    config: { chip: gpiochip99, lines: [0] }
+    bindings:
+      - tag: Pull
+        image: I
+        bit: 0
+"#,
+    )
+    .unwrap();
+    let cfg = cfg_with(&["gpio"], map_path.to_str().expect("utf8 path"));
+    let err = match Supervisor::boot(
+        cfg,
+        Some(repo_root().join("samples/configs/sim-plant.yaml")),
+        None,
+        None,
+    )
+    .await
+    {
+        Ok(_) => panic!("gpiochip99 should not open"),
+        Err(err) => err,
+    };
+    let text = err.to_string();
+    assert!(text.contains("gpiochip99"), "{text}");
+    assert!(!text.contains("PR-17"), "{text}");
+    let _ = std::fs::remove_file(map_path);
 }
 
 #[tokio::test]

@@ -10,6 +10,7 @@ use std::time::Duration;
 use plc_api::{bind_listener, serve_on, AppState};
 use plc_config::{DeviceConfig, ProfileKind};
 use plc_io::{FieldGate, IoDriver, IoMap};
+use plc_io_gpio::{validate_map as validate_gpio, GpioDriver};
 use plc_io_modbus::{validate_map, ModbusBridge};
 use plc_io_sim::SharedSim;
 use plc_retain::RetainStore;
@@ -56,19 +57,32 @@ impl Supervisor {
         let map = IoMap::load_from_path(&io_map_path)?;
         check_io_drivers(&cfg, &map)?;
         let resolved = map.resolve()?;
-        let plan = validate_map(&map, &resolved)?;
+        let modbus_plan = validate_map(&map, &resolved)?;
+        let gpio_plan = validate_gpio(&map, &resolved)?;
         let image = resolved.image.clone();
         let n_i = image.inputs.len();
         let n_q = image.outputs.len();
         let sim = SharedSim::new("sim", n_i, n_q);
-        let (driver, field_gate): (Box<dyn IoDriver>, Option<Arc<FieldGate>>) =
-            if plan.modules.is_empty() {
-                (Box::new(sim.clone()), None)
+        let field = !modbus_plan.modules.is_empty() || !gpio_plan.modules.is_empty();
+        let (driver, field_gate): (Box<dyn IoDriver>, Option<Arc<FieldGate>>) = if !field {
+            (Box::new(sim.clone()), None)
+        } else {
+            let gate = Arc::new(FieldGate::new());
+            let gpio = if gpio_plan.modules.is_empty() {
+                None
             } else {
-                let gate = Arc::new(FieldGate::new());
-                let bridge = ModbusBridge::new(plan, Arc::clone(&gate));
-                (Box::new(RoutedDriver::new(sim.clone(), bridge)), Some(gate))
+                Some(GpioDriver::new(gpio_plan, Arc::clone(&gate)))
             };
+            let bridge = if modbus_plan.modules.is_empty() {
+                None
+            } else {
+                Some(ModbusBridge::new(modbus_plan, Arc::clone(&gate)))
+            };
+            (
+                Box::new(RoutedDriver::new(sim.clone(), bridge, gpio)),
+                Some(gate),
+            )
+        };
         let mut io = plc_scan::ScanIo::new(image, driver);
         io.field_gate = field_gate;
         let plan = ScanPlan::from_config(&cfg).map_err(|e| AppError::config(e.to_string()))?;
@@ -296,12 +310,7 @@ impl Drop for Supervisor {
 
 fn check_io_drivers(cfg: &DeviceConfig, map: &IoMap) -> Result<(), AppError> {
     for driver in &cfg.io.drivers {
-        if driver == "gpio" {
-            return Err(AppError::config(
-                "gpio is PR-17 (this runtime accepts io.drivers sim and modbus_tcp)",
-            ));
-        }
-        if driver != "sim" && driver != "modbus_tcp" {
+        if driver != "sim" && driver != "modbus_tcp" && driver != "gpio" {
             return Err(AppError::config(format!(
                 "unsupported io.drivers entry '{driver}'"
             )));
@@ -309,6 +318,7 @@ fn check_io_drivers(cfg: &DeviceConfig, map: &IoMap) -> Result<(), AppError> {
     }
     let enabled: BTreeSet<&str> = cfg.io.drivers.iter().map(String::as_str).collect();
     let mut modbus_modules = 0usize;
+    let mut gpio_modules = 0usize;
     for module in &map.modules {
         if !enabled.contains(module.driver.as_str()) {
             return Err(AppError::config(format!(
@@ -319,10 +329,18 @@ fn check_io_drivers(cfg: &DeviceConfig, map: &IoMap) -> Result<(), AppError> {
         if module.driver == "modbus_tcp" {
             modbus_modules += 1;
         }
+        if module.driver == "gpio" {
+            gpio_modules += 1;
+        }
     }
     if enabled.contains("modbus_tcp") && modbus_modules == 0 {
         return Err(AppError::config(
             "io.drivers includes modbus_tcp but the io-map has no modbus_tcp module",
+        ));
+    }
+    if enabled.contains("gpio") && gpio_modules == 0 {
+        return Err(AppError::config(
+            "io.drivers includes gpio but the io-map has no gpio module",
         ));
     }
     Ok(())
