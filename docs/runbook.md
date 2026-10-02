@@ -70,6 +70,8 @@ The unsigned demo `.spkg` will **not** arm. Sign packages with the PR-09 Ed25519
 
 SIM has no field actuators. Production deployments must still provide remote I/O heartbeat / hardware fail-safe as in `docs/architecture.md` (userspace crash must not leave outputs energized).
 
+Local GPIO requests lines with the character device (uAPI v2, kernel 5.10+). Outputs come up at `safe_state` and default to open-drain. SIM drives `safe_state` and does not copy pin reads over injected inputs. Process exit closes the request fd so the kernel releases the lines. A systemd `ExecStop=` write is not that fail-safe. Wire outputs so they de-energize when the pin floats. See `crates/plc-io-gpio/README.md`.
+
 ## SCHED_FIFO
 
 The scan thread requests `SCHED_FIFO` and optional `scan.cpu_affinity`. If unprivileged, it logs a warning and continues as CFS. Full PREEMPT_RT guidance is PR-19.

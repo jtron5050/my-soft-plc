@@ -19,6 +19,8 @@ pub const RT_PATH_CRATES: &[&str] = &[
     "plc-fb-primitives",
     // `plc-types` is shared; it must stay free of forbidden deps (enforced here).
     "plc-types",
+    // Local GPIO poll/apply runs on the scan thread (KD-5a).
+    "plc-io-gpio",
 ];
 
 /// Dependency crate names that must never appear in RT-path crate graphs.
@@ -53,6 +55,7 @@ mod tests {
         assert!(RT_PATH_CRATES.contains(&"plc-types"));
         assert!(RT_PATH_CRATES.contains(&"plc-scan"));
         assert!(RT_PATH_CRATES.contains(&"plc-vm"));
+        assert!(RT_PATH_CRATES.contains(&"plc-io-gpio"));
     }
 
     #[test]

@@ -1,0 +1,19 @@
+# Local GPIO bench map (PR-17). Not used by the SIM demo.
+# `bit` indexes `lines`.
+version: 1
+modules:
+  - id: local_di_1
+    driver: gpio
+    config: { chip: gpiochip0, lines: [0, 1, 2, 3] }
+    bindings:
+      - tag: Conveyor1.PullCordOK
+        image: I
+        bit: 0
+  - id: local_do_1
+    driver: gpio
+    config: { chip: gpiochip1, lines: [0, 1] }
+    bindings:
+      - tag: Conveyor1.RunFwd
+        image: Q
+        bit: 0
+        safe_state: false

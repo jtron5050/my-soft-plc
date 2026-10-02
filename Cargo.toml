@@ -7,6 +7,7 @@ members = [
     "crates/plc-io",
     "crates/plc-io-sim",
     "crates/plc-io-modbus",
+    "crates/plc-io-gpio",
     "crates/plc-ir",
     "crates/plc-fb-primitives",
     "crates/plc-vm",
@@ -40,6 +41,7 @@ plc-auth = { path = "crates/plc-auth", version = "0.1.0" }
 plc-io = { path = "crates/plc-io", version = "0.1.0" }
 plc-io-sim = { path = "crates/plc-io-sim", version = "0.1.0" }
 plc-io-modbus = { path = "crates/plc-io-modbus", version = "0.1.0" }
+plc-io-gpio = { path = "crates/plc-io-gpio", version = "0.1.0" }
 plc-ir = { path = "crates/plc-ir", version = "0.1.0" }
 plc-fb-primitives = { path = "crates/plc-fb-primitives", version = "0.1.0" }
 plc-vm = { path = "crates/plc-vm", version = "0.1.0" }

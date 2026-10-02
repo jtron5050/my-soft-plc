@@ -18,6 +18,7 @@ clap = { workspace = true }
 plc-api = { workspace = true }
 plc-config = { workspace = true }
 plc-io = { workspace = true }
+plc-io-gpio = { workspace = true }
 plc-io-modbus = { workspace = true }
 plc-io-sim = { workspace = true }
 plc-package = { workspace = true }

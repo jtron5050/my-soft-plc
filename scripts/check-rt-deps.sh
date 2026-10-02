@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-RT_CRATES=(plc-scan plc-vm plc-fb-primitives plc-types plc-ir) # plc-vm is RT-callable
+RT_CRATES=(plc-scan plc-vm plc-fb-primitives plc-types plc-ir plc-io-gpio) # plc-vm is RT-callable; gpio runs on the scan thread
 # rumqttc / tokio belong in plc-telemetry (and later plc-api), never RT crates.
 FORBIDDEN=(tokio tokio-util hyper hyper-util reqwest axum warp actix-web mio socket2 rustls native-tls openssl rumqttc paho-mqtt)
 

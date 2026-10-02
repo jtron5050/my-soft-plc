@@ -20,6 +20,7 @@ Rust monorepo (`crates/*`). Current crates:
 | [`plc-io`](crates/plc-io) | Process image, quality, IoDriver trait, double-buffer, force priority |
 | [`plc-io-sim`](crates/plc-io-sim) | Simulation I/O driver |
 | [`plc-io-modbus`](crates/plc-io-modbus) | Modbus TCP poll worker (non-RT) |
+| [`plc-io-gpio`](crates/plc-io-gpio) | Linux GPIO DI/DO (in-RT) |
 | [`plc-ir`](crates/plc-ir) | IR v0.1 types, `spbc` framing, verifier, `spasm` assembler |
 | [`plc-fb-primitives`](crates/plc-fb-primitives) | Native FBs: TON/TOF/TP, CTU/CTD, RS/SR, edges, PID |
 | [`plc-vm`](crates/plc-vm) | IR v0.1 interpreter (no alloc in run loop) |
@@ -67,4 +68,5 @@ CI runs the same checks on every push and pull request.
 
 PR-01–PR-14 are in place (workspace through the `soft-plc-runtime` binary and SIM demo conveyor).
 PR-15 adds the host `plc-compiler` (Appendix B ST-subset → `.spkg`).
-PR-16 adds the Modbus TCP poll worker (`plc-io-modbus`). GPIO remains PR-17.
+PR-16 adds the Modbus TCP poll worker (`plc-io-modbus`).
+PR-17 adds the Linux GPIO driver (`plc-io-gpio`).
