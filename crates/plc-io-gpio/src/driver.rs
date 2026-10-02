@@ -9,7 +9,7 @@ use plc_io::{
 use plc_types::{OperatingMode, Quality};
 
 use crate::linux::{config_flags, line_mask, LineClaim, LineIo, LinuxLines};
-use crate::validate::{GpioPlan, LineDirection, PlannedModule};
+use crate::validate::{Drive, GpioPlan, LineDirection, PlannedModule};
 
 /// In-RT gpiochip driver.
 ///
@@ -20,6 +20,8 @@ pub struct GpioDriver {
     backend: Option<Box<dyn LineIo>>,
     gate: Arc<FieldGate>,
     fails: u32,
+    /// Errno from the latest failed ioctl. Zero after a clean poll or apply.
+    last_errno: i32,
     seq: u64,
     running: bool,
 }
@@ -32,6 +34,8 @@ struct ModuleRt {
     slots: Vec<Option<usize>>,
     safe_bits: u64,
     mask: u64,
+    /// Open-drain: process-image 0 is kernel logical 1 (Hi-Z).
+    open_drain: bool,
     on_bad: BadQualityPolicy,
     quality: Quality,
     last_bits: u64,
@@ -50,6 +54,7 @@ impl GpioDriver {
             backend: None,
             gate,
             fails: 0,
+            last_errno: 0,
             seq: 0,
             running: false,
         }
@@ -78,6 +83,7 @@ impl ModuleRt {
             is_input,
             slots,
             safe_bits,
+            open_drain: module.drive == Some(Drive::OpenDrain),
             on_bad: module.on_bad,
             quality: Quality::Good,
             last_bits: 0,
@@ -89,7 +95,7 @@ impl ModuleRt {
             chip_path: self.chip_path.clone(),
             offsets: self.offsets.clone(),
             flags: self.flags,
-            initial_values: self.safe_bits,
+            initial_values: kernel_output_bits(self, self.safe_bits),
             is_output: !self.is_input,
             mask: self.mask,
         }
@@ -118,7 +124,11 @@ impl IoDriver for GpioDriver {
         };
         self.running = false;
         for (index, module) in self.modules.iter().enumerate() {
-            let safe = if module.is_input { 0 } else { module.safe_bits };
+            let safe = if module.is_input {
+                0
+            } else {
+                kernel_output_bits(module, module.safe_bits)
+            };
             backend.release(index, safe);
         }
     }
@@ -137,6 +147,7 @@ impl IoDriver for GpioDriver {
             &mut self.modules,
             backend.as_mut(),
             &mut self.fails,
+            &mut self.last_errno,
             &mut self.seq,
             out,
         );
@@ -154,6 +165,7 @@ impl IoDriver for GpioDriver {
             &mut self.modules,
             backend.as_mut(),
             &mut self.fails,
+            &mut self.last_errno,
             self.gate.mode() == OperatingMode::Sim,
             image,
         );
@@ -162,10 +174,12 @@ impl IoDriver for GpioDriver {
 
     fn diagnostics(&self) -> DriverDiag {
         DriverDiag {
-            status: if self.running {
+            status: if !self.running {
+                "stopped".into()
+            } else if self.last_errno == 0 {
                 "running".into()
             } else {
-                "stopped".into()
+                format!("running errno {}", self.last_errno)
             },
             fail_count: self.fails,
             last_seq: self.seq,
@@ -200,27 +214,37 @@ fn poll_modules(
     modules: &mut [ModuleRt],
     backend: &mut dyn LineIo,
     fails: &mut u32,
+    last_errno: &mut i32,
     seq: &mut u64,
     out: &mut InputUpdate,
 ) {
     *seq = seq.wrapping_add(1);
     out.seq = *seq;
+    let mut saw_input = false;
+    let mut scan_errno = 0_i32;
     for (index, module) in modules.iter_mut().enumerate() {
         if !module.is_input {
             continue;
         }
+        saw_input = true;
         match backend.read_bits(index) {
             Ok(bits) => {
                 module.quality = Quality::Good;
                 module.last_bits = bits;
                 write_inputs(module, bits, Quality::Good, out);
             }
-            Err(()) => {
+            Err(errno) => {
                 module.quality = Quality::Bad;
                 *fails = fails.saturating_add(1);
+                scan_errno = errno;
                 write_inputs(module, module.last_bits, Quality::Bad, out);
             }
         }
+    }
+    if scan_errno != 0 {
+        *last_errno = scan_errno;
+    } else if saw_input {
+        *last_errno = 0;
     }
 }
 
@@ -242,28 +266,42 @@ fn apply_modules(
     modules: &mut [ModuleRt],
     backend: &mut dyn LineIo,
     fails: &mut u32,
+    last_errno: &mut i32,
     sim_mode: bool,
     image: &OutputImage,
 ) {
+    let mut saw_output = false;
+    let mut scan_errno = 0_i32;
     for (index, module) in modules.iter_mut().enumerate() {
         if module.is_input {
             continue;
         }
-        if !sim_mode
-            && !image.force_safe
-            && module.quality.is_bad()
-            && module.on_bad == BadQualityPolicy::HoldLast
-        {
-            continue;
-        }
-        let bits = desired_bits(module, image, sim_mode);
+        saw_output = true;
+        // No input read clears Bad on an output module, so keep issuing the set.
+        let bits = kernel_output_bits(module, desired_bits(module, image, sim_mode));
         match backend.write_bits(index, bits, module.mask) {
             Ok(()) => module.quality = Quality::Good,
-            Err(()) => {
+            Err(errno) => {
                 module.quality = Quality::Bad;
                 *fails = fails.saturating_add(1);
+                scan_errno = errno;
             }
         }
+    }
+    if scan_errno != 0 {
+        *last_errno = scan_errno;
+    } else if saw_output {
+        *last_errno = 0;
+    }
+}
+
+/// gpiolib open-drain treats logical 1 as Hi-Z and logical 0 as driven low.
+/// Process-image false must float, so invert every owned bit.
+fn kernel_output_bits(module: &ModuleRt, process_bits: u64) -> u64 {
+    if module.open_drain {
+        process_bits ^ module.mask
+    } else {
+        process_bits
     }
 }
 
@@ -308,22 +346,22 @@ mod tests {
     }
 
     impl LineIo for MockLines {
-        fn read_bits(&mut self, module: usize) -> Result<u64, ()> {
+        fn read_bits(&mut self, module: usize) -> Result<u64, i32> {
             let mut state = self.state.lock().expect("mock");
             if let Some(count) = state.reads.get_mut(module) {
                 *count = count.saturating_add(1);
             }
             if state.fail_read.get(module).copied().unwrap_or(true) {
-                return Err(());
+                return Err(libc::EIO);
             }
-            state.bits.get(module).copied().ok_or(())
+            state.bits.get(module).copied().ok_or(libc::EINVAL)
         }
 
-        fn write_bits(&mut self, module: usize, bits: u64, mask: u64) -> Result<(), ()> {
+        fn write_bits(&mut self, module: usize, bits: u64, mask: u64) -> Result<(), i32> {
             let mut state = self.state.lock().expect("mock");
             state.writes.push((module, bits, mask));
             if state.fail_write.get(module).copied().unwrap_or(true) {
-                return Err(());
+                return Err(libc::EIO);
             }
             if let Some(slot) = state.bits.get_mut(module) {
                 *slot = bits;
@@ -493,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn hold_last_skips_until_force_safe() {
+    fn failed_write_retries_on_the_next_scan() {
         let plan = bench_plan();
         let gate = Arc::new(FieldGate::new());
         gate.set_mode(OperatingMode::Run);
@@ -505,18 +543,78 @@ mod tests {
         };
         driver.apply_outputs(&image).unwrap();
         assert_eq!(state.lock().expect("mock").writes.len(), 1);
+        assert!(driver.diagnostics().status.contains("errno"));
+        let mut slot_state = vec![
+            OutputModuleState {
+                quality: Quality::Good,
+                on_bad_quality: BadQualityPolicy::ForceSafe,
+            };
+            2
+        ];
+        assert!(driver.fill_output_module_state(&mut slot_state));
+        assert_eq!(slot_state[0].quality, Quality::Bad);
+        assert_eq!(slot_state[0].on_bad_quality, BadQualityPolicy::HoldLast);
+
         state.lock().expect("mock").fail_write[1] = false;
-        driver.apply_outputs(&image).unwrap();
-        assert_eq!(state.lock().expect("mock").writes.len(), 1);
+        let recovered = OutputImage {
+            values: vec![PlcValue::Bool(true), PlcValue::Bool(true)],
+            force_safe: false,
+        };
+        driver.apply_outputs(&recovered).unwrap();
+        assert!(driver.fill_output_module_state(&mut slot_state));
+        assert_eq!(slot_state[0].quality, Quality::Good);
+        assert_eq!(driver.diagnostics().status, "running");
+        let state_ref = state.lock().expect("mock");
+        assert_eq!(state_ref.writes.len(), 2);
+        assert_eq!(state_ref.writes[1], (1, 0b11, 0b11));
+    }
+
+    #[test]
+    fn open_drain_false_floats_and_true_drives_low() {
+        let plan = plan_from(
+            r#"
+  - id: do_mod
+    driver: gpio
+    config:
+      chip: gpiochip1
+      lines: [7, 8]
+    bindings:
+      - tag: Run
+        image: Q
+        bit: 0
+        safe_state: false
+      - tag: Alarm
+        image: Q
+        bit: 1
+        safe_state: true
+"#,
+        );
+        assert_eq!(
+            plan.modules[0].drive,
+            Some(crate::validate::Drive::OpenDrain)
+        );
+        let gate = Arc::new(FieldGate::new());
+        gate.set_mode(OperatingMode::Run);
+        let (mut driver, state) = mock_driver(&plan, gate);
+        let claim = driver.modules[0].claim();
+        assert_eq!(claim.initial_values, 0b01);
+        assert_eq!(claim.mask, 0b11);
         driver
             .apply_outputs(&OutputImage {
-                values: image.values,
+                values: vec![PlcValue::Bool(true), PlcValue::Bool(false)],
+                force_safe: false,
+            })
+            .unwrap();
+        driver
+            .apply_outputs(&OutputImage {
+                values: vec![PlcValue::Bool(true), PlcValue::Bool(true)],
                 force_safe: true,
             })
             .unwrap();
+        driver.stop();
         let state_ref = state.lock().expect("mock");
-        assert_eq!(state_ref.writes.len(), 2);
-        assert_eq!(state_ref.writes[1], (1, 0b10, 0b11));
+        assert_eq!(state_ref.writes, vec![(0, 0b10, 0b11), (0, 0b01, 0b11)]);
+        assert_eq!(state_ref.releases, vec![(0, 0b01)]);
     }
 
     #[test]

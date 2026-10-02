@@ -37,11 +37,11 @@ Sleeping controllers (I2C or SPI expanders) are out of scope. The WCET assumptio
 
 ## Quality and fail-safe
 
-A successful read is Good. A failed read keeps the last sample (false until the first success), marks that module Bad, and does not fail the scan. A failed write marks that output module Bad. The next scan applies that module's `on_bad_quality`. A bad input module does not mark a different output module Bad. `hold_last` skips output ioctls while the module stays Bad. STOP, FAULT, or `force_safe` still writes `safe_state`.
+A successful read is Good. A failed read keeps the last sample (false until the first success), marks that module Bad, and does not fail the scan. A failed write marks that output module Bad and records the errno on the driver status. The next scan tries the write again. An output module has no read, so a failed set must not stick. A bad input module does not mark a different output module Bad. The scan mapper applies `on_bad_quality`: `force_safe` substitutes `safe_state` while the module is Bad, and `hold_last` keeps the program `%Q`. STOP, FAULT, or `force_safe` still writes `safe_state`. `EINTR` and `EAGAIN` are retried inside the ioctl before the module is marked Bad.
 
-Outputs are requested already at `safe_state`. The default drive is open-drain. In SIM the driver writes `safe_state` and does not copy pin reads over injected inputs.
+Outputs are requested already at `safe_state`. The default drive is open-drain. Process-image false is inactive. On open-drain that is kernel logical 1, which gpiolib releases (Hi-Z), and true is kernel logical 0, which drives the pin low. A load from the supply to the pin drops out when the BOOL is false, including at claim and on `force_safe`. Leave `active_low` false for that wiring; the flag is passed to the kernel and inverts the level again. Push-pull drives false low and true high, with no invert. In SIM the driver writes `safe_state` and does not copy pin reads over injected inputs.
 
-`stop` writes `safe_state` and closes the request fd. Process death closes that fd too, and the kernel releases the lines. Release returns the pin to the controller default. Open-drain or de-energize-on-float hardware is what makes that electrically safe. A systemd `ExecStop=` write is not the fail-safe. Push-pull with an external pull-up can stay energized after release.
+`stop` writes that safe level, then closes the request fd. Process death closes the fd and the kernel drops the request. The level left on the pin is up to the gpio driver; close does not restore a controller default. Wire the load so Hi-Z de-energizes it. A systemd `ExecStop=` write is not the fail-safe. Emulated open-drain changes direction inside the set ioctl and can sleep. Sleeping controllers stay out of scope.
 
 ## Bench check
 

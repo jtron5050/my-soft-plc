@@ -32,10 +32,14 @@ pub(crate) struct LineClaim {
 
 pub(crate) trait LineIo: Send {
     /// Read the module bitmap. Bit *i* is `offsets[i]`.
-    fn read_bits(&mut self, module: usize) -> Result<u64, ()>;
+    ///
+    /// The error is an errno.
+    fn read_bits(&mut self, module: usize) -> Result<u64, i32>;
 
     /// Write `bits` where `mask` is set.
-    fn write_bits(&mut self, module: usize, bits: u64, mask: u64) -> Result<(), ()>;
+    ///
+    /// The error is an errno.
+    fn write_bits(&mut self, module: usize, bits: u64, mask: u64) -> Result<(), i32>;
 
     /// Drive `safe_bits` on outputs, then close the request fd.
     fn release(&mut self, module: usize, safe_bits: u64);
@@ -56,6 +60,8 @@ const GPIO_V2_LINE_GET_VALUES_IOCTL: u64 = 0xc010_b40e;
 const GPIO_V2_LINE_SET_VALUES_IOCTL: u64 = 0xc010_b40f;
 
 const LINES_MAX: usize = 64;
+/// Bounded immediate retries. A signal must not fail the scan.
+const IOCTL_ATTEMPTS: u32 = 4;
 
 /// Flags stored in `gpio_v2_line_config.flags`.
 pub(crate) fn config_flags(
@@ -130,31 +136,28 @@ impl LinuxLines {
 }
 
 impl LineIo for LinuxLines {
-    fn read_bits(&mut self, module: usize) -> Result<u64, ()> {
+    fn read_bits(&mut self, module: usize) -> Result<u64, i32> {
         let Some(req) = self.reqs.get_mut(module) else {
-            return Err(());
+            return Err(libc::EINVAL);
         };
         let mask = req.mask;
         let Some(fd) = req.fd.as_ref() else {
-            return Err(());
+            return Err(libc::EBADF);
         };
-        let mut values = GpioV2LineValues { bits: 0, mask };
-        ioctl_values(fd.as_raw_fd(), GPIO_V2_LINE_GET_VALUES_IOCTL, &mut values)?;
-        Ok(values.bits)
+        ioctl_values(fd.as_raw_fd(), GPIO_V2_LINE_GET_VALUES_IOCTL, 0, mask)
     }
 
-    fn write_bits(&mut self, module: usize, bits: u64, mask: u64) -> Result<(), ()> {
+    fn write_bits(&mut self, module: usize, bits: u64, mask: u64) -> Result<(), i32> {
         let Some(req) = self.reqs.get_mut(module) else {
-            return Err(());
+            return Err(libc::EINVAL);
         };
         if !req.is_output {
-            return Err(());
+            return Err(libc::EINVAL);
         }
         let Some(fd) = req.fd.as_ref() else {
-            return Err(());
+            return Err(libc::EBADF);
         };
-        let mut values = GpioV2LineValues { bits, mask };
-        ioctl_values(fd.as_raw_fd(), GPIO_V2_LINE_SET_VALUES_IOCTL, &mut values)
+        ioctl_values(fd.as_raw_fd(), GPIO_V2_LINE_SET_VALUES_IOCTL, bits, mask).map(|_| ())
     }
 
     fn release(&mut self, module: usize, safe_bits: u64) {
@@ -168,11 +171,12 @@ fn release_req(req: &mut LineReq, safe_bits: u64) {
     if req.is_output {
         let mask = req.mask;
         if let Some(fd) = req.fd.as_ref() {
-            let mut values = GpioV2LineValues {
-                bits: safe_bits,
+            let _ = ioctl_values(
+                fd.as_raw_fd(),
+                GPIO_V2_LINE_SET_VALUES_IOCTL,
+                safe_bits,
                 mask,
-            };
-            let _ = ioctl_values(fd.as_raw_fd(), GPIO_V2_LINE_SET_VALUES_IOCTL, &mut values);
+            );
         }
     }
     req.fd.take();
@@ -196,15 +200,27 @@ fn request_one(claim: &LineClaim) -> Result<OwnedFd, IoError> {
         req.config.attrs[0].attr.value = claim.initial_values;
         req.config.attrs[0].mask = claim.mask;
     }
-    let rc = unsafe {
-        libc::ioctl(
-            chip.as_raw_fd(),
-            GPIO_V2_GET_LINE_IOCTL as libc::Ioctl,
-            &mut req,
-        )
-    };
-    if rc < 0 {
-        let err = Error::last_os_error();
+    let mut last_errno = libc::EIO;
+    for _ in 0..IOCTL_ATTEMPTS {
+        req.fd = -1;
+        let rc = unsafe {
+            libc::ioctl(
+                chip.as_raw_fd(),
+                GPIO_V2_GET_LINE_IOCTL as libc::Ioctl,
+                &mut req,
+            )
+        };
+        if rc >= 0 {
+            last_errno = 0;
+            break;
+        }
+        last_errno = Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+        if !is_transient(last_errno) {
+            break;
+        }
+    }
+    if last_errno != 0 {
+        let err = Error::from_raw_os_error(last_errno);
         return Err(IoError::Driver(format_line_error(label, &err)));
     }
     if req.fd < 0 {
@@ -229,13 +245,27 @@ fn open_chip(path: &Path, label: &str) -> Result<OwnedFd, IoError> {
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-fn ioctl_values(fd: i32, request: u64, values: &mut GpioV2LineValues) -> Result<(), ()> {
-    let rc = unsafe { libc::ioctl(fd, request as libc::Ioctl, values) };
-    if rc < 0 {
-        Err(())
-    } else {
-        Ok(())
+/// `EINTR` and `EAGAIN` are retried in place. Other errnos fail the call.
+fn ioctl_values(fd: i32, request: u64, bits: u64, mask: u64) -> Result<u64, i32> {
+    let mut values = GpioV2LineValues { bits, mask };
+    let mut last = libc::EIO;
+    for _ in 0..IOCTL_ATTEMPTS {
+        values.bits = bits;
+        values.mask = mask;
+        let rc = unsafe { libc::ioctl(fd, request as libc::Ioctl, &mut values) };
+        if rc >= 0 {
+            return Ok(values.bits);
+        }
+        last = Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+        if !is_transient(last) {
+            return Err(last);
+        }
     }
+    Err(last)
+}
+
+fn is_transient(errno: i32) -> bool {
+    errno == libc::EINTR || errno == libc::EAGAIN
 }
 
 fn chip_label(path: &Path) -> &str {
@@ -363,6 +393,16 @@ mod tests {
         assert_eq!(line_mask(0), 0);
         assert_eq!(line_mask(3), 0b111);
         assert_eq!(line_mask(64), u64::MAX);
+    }
+
+    #[test]
+    fn transient_ioctl_errors_are_retried() {
+        assert!(is_transient(libc::EINTR));
+        assert!(is_transient(libc::EAGAIN));
+        assert!(!is_transient(libc::EIO));
+        assert!(!is_transient(libc::EBADF));
+        assert!(!is_transient(libc::ENOTTY));
+        assert!(!is_transient(libc::ENODEV));
     }
 
     #[test]
