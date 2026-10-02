@@ -85,6 +85,7 @@ keys in PR-13.
 | `Node Control/Rebirth` | Boolean | Birth (`false`); writable via NCMD |
 | `SYSTEM/Mode` | String (`STOP`/`RUN`/`FAULT`/`SIM`) | Birth + change |
 | `telemetry_drops` | Int64 | Birth + when the scan SPSC drop counter changes |
+| `logic_overruns` | Int64 | Birth + when the scan logic-overrun total changes |
 
 Node DATA metrics include **names** (few of them).
 

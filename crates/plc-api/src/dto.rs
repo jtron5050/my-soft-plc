@@ -127,6 +127,8 @@ pub struct TaskTimingBody {
     pub last_us: u64,
     /// Max invocation µs.
     pub max_us: u64,
+    /// Integer mean of invocation durations (µs).
+    pub avg_us: u64,
     /// Lifetime overruns.
     pub overruns: u32,
 }
@@ -247,7 +249,7 @@ pub struct ActivateQuery {
 pub struct PageQuery {
     /// Max items (default 100, max 1000).
     pub limit: Option<u32>,
-    /// Return items with `seq` greater than this (events) or index (audit).
+    /// Return items with `seq` greater than this.
     pub cursor: Option<u64>,
 }
 

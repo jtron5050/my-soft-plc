@@ -1,5 +1,6 @@
 //! Cooperative scan engine: schedule + I → L → Q.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use plc_config::{DeviceConfig, StopOutputPolicy};
@@ -18,7 +19,7 @@ use crate::error::ScanError;
 use crate::hooks::EpochHooks;
 use crate::mode::{ModeCell, ModeRequest, ScanHandle};
 use crate::retain_signal::{RetainDirtySignal, RetainDirtyWatch};
-use crate::status::{ScanStatusSnapshot, TaskTiming};
+use crate::status::{duration_bucket, ScanStatusSnapshot, TaskTiming};
 use crate::telemetry::{telemetry_channel, PublishTrack, TelemetrySink, TelemetrySource};
 use crate::watchdog::{HardwareWatchdog, NullWatchdog, SoftwareWatchdog};
 
@@ -193,6 +194,9 @@ struct TaskRuntime {
     next_due_ms: u64,
     last_us: u64,
     max_us: u64,
+    sum_us: u64,
+    samples: u64,
+    duration_buckets: [u64; crate::status::DURATION_BUCKETS],
     overruns: u32,
 }
 
@@ -203,6 +207,7 @@ pub struct ScanEngine {
     vm: Option<Vm>,
     clock: Box<dyn ScanClock>,
     modes: ModeCell,
+    overruns_total: Arc<AtomicU64>,
     sw_wd: SoftwareWatchdog,
     hw_wd: Box<dyn HardwareWatchdog>,
     tel_sink: TelemetrySink,
@@ -296,6 +301,9 @@ impl ScanEngine {
                     next_due_ms: 0,
                     last_us: 0,
                     max_us: 0,
+                    sum_us: 0,
+                    samples: 0,
+                    duration_buckets: [0; crate::status::DURATION_BUCKETS],
                     overruns: 0,
                 })
                 .collect(),
@@ -307,6 +315,7 @@ impl ScanEngine {
             vm,
             clock,
             modes: ModeCell::new(),
+            overruns_total: Arc::new(AtomicU64::new(0)),
             hw_wd: Box::new(NullWatchdog),
             tel_sink,
             tel_src,
@@ -342,10 +351,10 @@ impl ScanEngine {
         self
     }
 
-    /// Non-RT mode handle.
+    /// Non-RT mode handle (shares the overrun counter).
     #[must_use]
     pub fn handle(&self) -> ScanHandle {
-        ScanHandle::new(self.modes.clone())
+        ScanHandle::new(self.modes.clone(), Arc::clone(&self.overruns_total))
     }
 
     /// Queue a mode request (same as [`ScanHandle::request_mode`]).
@@ -370,13 +379,25 @@ impl ScanEngine {
                 .tasks
                 .iter()
                 .enumerate()
-                .map(|(i, t)| TaskTiming {
-                    name: t.name.clone(),
-                    period_ms: t.period_ms,
-                    last_us: self.tasks[i].last_us,
-                    max_us: self.tasks[i].max_us,
-                    overruns: self.tasks[i].overruns,
-                    consecutive_overruns: self.sw_wd.consecutive(i),
+                .map(|(i, t)| {
+                    let samples = self.tasks[i].samples;
+                    let avg_us = if samples == 0 {
+                        0
+                    } else {
+                        self.tasks[i].sum_us / samples
+                    };
+                    TaskTiming {
+                        name: t.name.clone(),
+                        period_ms: t.period_ms,
+                        last_us: self.tasks[i].last_us,
+                        max_us: self.tasks[i].max_us,
+                        avg_us,
+                        sum_us: self.tasks[i].sum_us,
+                        samples,
+                        duration_buckets: self.tasks[i].duration_buckets,
+                        overruns: self.tasks[i].overruns,
+                        consecutive_overruns: self.sw_wd.consecutive(i),
+                    }
                 })
                 .collect(),
             telemetry_drops: self.tel_src.drops(),
@@ -794,6 +815,7 @@ impl ScanEngine {
             let trip = self.sw_wd.note(task, duration_us, period_ms);
             if duration_us >= u64::from(period_ms).saturating_mul(1000) {
                 self.tasks[task].overruns = self.tasks[task].overruns.saturating_add(1);
+                self.overruns_total.fetch_add(1, Ordering::Relaxed);
             }
             if trip {
                 self.enter_fault();
@@ -804,6 +826,11 @@ impl ScanEngine {
         if duration_us > self.tasks[task].max_us {
             self.tasks[task].max_us = duration_us;
         }
+        self.tasks[task].sum_us = self.tasks[task].sum_us.saturating_add(duration_us);
+        self.tasks[task].samples = self.tasks[task].samples.saturating_add(1);
+        let bucket = duration_bucket(duration_us);
+        self.tasks[task].duration_buckets[bucket] =
+            self.tasks[task].duration_buckets[bucket].saturating_add(1);
 
         self.apply_outputs(ran_logic_ok);
         if ran_logic_ok {

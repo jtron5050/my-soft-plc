@@ -6,12 +6,14 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
-use plc_auth::{AuditEvent, AuditSink, AuthService, Clock, MemoryAudit, SystemClock};
+use plc_auth::{AuditEvent, AuditSink, AuthService, Clock, SystemClock};
 use plc_config::DeviceConfig;
 use plc_runtime::Runtime;
-use plc_scan::{EpochHooks, ScanHandle};
+use plc_scan::{EpochHooks, ScanHandle, ScanStatusSnapshot};
+use plc_types::OperatingMode;
 use tokio::sync::Semaphore;
 
+use crate::audit_log::RotatingAudit;
 use crate::events::EventRing;
 use crate::force_limit::ForceLimiter;
 use crate::program_store::ProgramStore;
@@ -42,10 +44,12 @@ pub struct AppState {
     pub config_path: Arc<Option<PathBuf>>,
     /// `.spkg` store.
     pub store: Arc<ProgramStore>,
-    /// Audit ring.
-    pub audit: Arc<MemoryAudit>,
+    /// Rotating audit file.
+    pub audit: Arc<RotatingAudit>,
     /// Diagnostics ring.
     pub events: Arc<EventRing>,
+    /// Last scan snapshot copied into the diagnostics ring.
+    diag_cursor: Arc<Mutex<ScanDiagCursor>>,
     /// Concurrent upload permit (1).
     pub upload_sem: Arc<Semaphore>,
     /// Serialize arm prepare/commit.
@@ -74,6 +78,9 @@ impl AppState {
         let scan_handle = runtime.engine().handle();
         let hooks = runtime.engine().epoch_hooks();
         let store = ProgramStore::open(cfg.paths.programs.clone())?;
+        let audit = RotatingAudit::open(&cfg.paths.audit)
+            .map_err(|e| crate::error::ApiError::internal(format!("audit log: {e}")))?;
+        let diag_cursor = ScanDiagCursor::from_status(&runtime.engine().status());
         Ok(Self {
             runtime: Arc::new(Mutex::new(runtime)),
             scan_handle,
@@ -82,8 +89,9 @@ impl AppState {
             config: Arc::new(RwLock::new(cfg)),
             config_path: Arc::new(config_path),
             store: Arc::new(store),
-            audit: Arc::new(MemoryAudit::new()),
+            audit: Arc::new(audit),
             events: Arc::new(EventRing::new()),
+            diag_cursor: Arc::new(Mutex::new(diag_cursor)),
             upload_sem: Arc::new(Semaphore::new(1)),
             arm_lock: Arc::new(tokio::sync::Mutex::new(())),
             force_limit: Arc::new(Mutex::new(ForceLimiter::new())),
@@ -98,6 +106,46 @@ impl AppState {
     #[must_use]
     pub fn unix_secs(&self) -> u64 {
         SystemClock.unix_secs()
+    }
+
+    /// Copy scan edges into the diagnostics ring. Counters stay on the scan thread.
+    pub fn poll_scan_diagnostics(&self) {
+        // Cover the status copy with the cursor lock. The interval task,
+        // `/metrics`, and `/diagnostics/events` poll concurrently; a copy taken
+        // before the lock can be committed after a newer one and rewind edges.
+        let mut cursor = self.diag_cursor.lock().expect("diag cursor");
+        let snap = {
+            let rt = self.runtime.lock().expect("runtime");
+            rt.engine().status()
+        };
+        let unix = self.unix_secs();
+        if snap.mode == OperatingMode::Fault && cursor.mode != OperatingMode::Fault {
+            self.events.push(unix, "fault", "mode=FAULT");
+        }
+        if snap.io_degraded && !cursor.io_degraded {
+            self.events.push(unix, "io_degraded", "quality=Bad");
+        }
+        let mut overruns = Vec::with_capacity(snap.tasks.len());
+        for task in &snap.tasks {
+            let prev = cursor
+                .overruns
+                .iter()
+                .find(|(name, _)| name == &task.name)
+                .map_or(0, |(_, count)| *count);
+            if task.overruns > prev {
+                let delta = task.overruns - prev;
+                self.events.push(
+                    unix,
+                    "logic_overrun",
+                    format!("task={} delta={delta}", task.name),
+                );
+            }
+            // Lifetime counts only move forward. A lower sample must not rewind.
+            overruns.push((task.name.clone(), task.overruns.max(prev)));
+        }
+        cursor.mode = snap.mode;
+        cursor.io_degraded = snap.io_degraded;
+        cursor.overruns = overruns;
     }
 
     /// Append audit + diagnostics.
@@ -137,5 +185,25 @@ impl AppState {
         };
         let _ = self.store.set_pointer("current", current.as_deref());
         let _ = self.store.set_pointer("armed", armed.as_deref());
+    }
+}
+
+struct ScanDiagCursor {
+    mode: OperatingMode,
+    io_degraded: bool,
+    overruns: Vec<(String, u32)>,
+}
+
+impl ScanDiagCursor {
+    fn from_status(snap: &ScanStatusSnapshot) -> Self {
+        Self {
+            mode: snap.mode,
+            io_degraded: snap.io_degraded,
+            overruns: snap
+                .tasks
+                .iter()
+                .map(|task| (task.name.clone(), task.overruns))
+                .collect(),
+        }
     }
 }

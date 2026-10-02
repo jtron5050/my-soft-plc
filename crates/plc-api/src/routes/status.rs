@@ -64,6 +64,7 @@ pub fn build_status(state: &AppState) -> StatusBody {
                     period_ms: t.period_ms,
                     last_us: t.last_us,
                     max_us: t.max_us,
+                    avg_us: t.avg_us,
                     overruns: t.overruns,
                 })
                 .collect(),

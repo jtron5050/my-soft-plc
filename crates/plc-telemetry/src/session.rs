@@ -29,6 +29,8 @@ pub const METRIC_REBIRTH: &str = "Node Control/Rebirth";
 pub const METRIC_MODE: &str = "SYSTEM/Mode";
 /// Scan-side SPSC drop counter.
 pub const METRIC_DROPS: &str = "telemetry_drops";
+/// Cumulative logic overruns (scan thread atomic).
+pub const METRIC_OVERRUNS: &str = "logic_overruns";
 
 /// Sparkplug sequence and birth/death encoder (no MQTT).
 #[derive(Debug, Clone)]
@@ -40,6 +42,7 @@ pub struct SessionState {
     catalog: TagCatalog,
     last_mode: Option<OperatingMode>,
     last_drops: Option<u64>,
+    last_overruns: Option<u64>,
     last_device: BTreeMap<(bool, u32), CachedDeviceValue>,
 }
 
@@ -61,6 +64,7 @@ impl SessionState {
             catalog: TagCatalog::default(),
             last_mode: None,
             last_drops: None,
+            last_overruns: None,
             last_device: BTreeMap::new(),
         }
     }
@@ -94,6 +98,7 @@ impl SessionState {
         self.device_seq = 0;
         self.last_mode = None;
         self.last_drops = None;
+        self.last_overruns = None;
     }
 
     /// Host rebirth on the same MQTT session: seq back to 0, `bdSeq` unchanged.
@@ -102,6 +107,7 @@ impl SessionState {
         self.device_seq = 0;
         self.last_mode = None;
         self.last_drops = None;
+        self.last_overruns = None;
     }
 
     /// NDEATH Will payload (`bdSeq` only).
@@ -120,11 +126,13 @@ impl SessionState {
         timestamp_ms: u64,
         mode: OperatingMode,
         drops: u64,
+        overruns: u64,
         quality: Quality,
     ) -> Payload {
         self.node_seq = 0;
         self.last_mode = Some(mode);
         self.last_drops = Some(drops);
+        self.last_overruns = Some(overruns);
         Payload {
             timestamp: Some(timestamp_ms),
             seq: Some(0),
@@ -133,6 +141,7 @@ impl SessionState {
                 named_bool(METRIC_REBIRTH, false, timestamp_ms, quality),
                 named_string(METRIC_MODE, mode.as_str(), timestamp_ms, quality),
                 named_int64(METRIC_DROPS, drops as i64, timestamp_ms, quality),
+                named_int64(METRIC_OVERRUNS, overruns as i64, timestamp_ms, quality),
             ],
         }
     }
@@ -190,6 +199,7 @@ impl SessionState {
         timestamp_ms: u64,
         mode: OperatingMode,
         drops: u64,
+        overruns: u64,
         quality: Quality,
     ) -> Option<Payload> {
         let mut metrics = Vec::new();
@@ -210,6 +220,15 @@ impl SessionState {
                 quality,
             ));
             self.last_drops = Some(drops);
+        }
+        if self.last_overruns != Some(overruns) {
+            metrics.push(named_int64(
+                METRIC_OVERRUNS,
+                overruns as i64,
+                timestamp_ms,
+                quality,
+            ));
+            self.last_overruns = Some(overruns);
         }
         if metrics.is_empty() {
             return None;
@@ -389,7 +408,7 @@ mod tests {
             }])
             .unwrap(),
         );
-        let birth = s.nbirth(1, OperatingMode::Stop, 0, Quality::Good);
+        let birth = s.nbirth(1, OperatingMode::Stop, 0, 0, Quality::Good);
         assert_eq!(birth.seq, Some(0));
         assert!(birth
             .metrics
@@ -428,7 +447,7 @@ mod tests {
         assert_eq!(s.bd_seq(), 1);
         s.on_rebirth();
         assert_eq!(s.bd_seq(), 1);
-        let b = s.nbirth(5, OperatingMode::Run, 3, Quality::Good);
+        let b = s.nbirth(5, OperatingMode::Run, 3, 0, Quality::Good);
         assert_eq!(b.seq, Some(0));
     }
 
@@ -463,5 +482,25 @@ mod tests {
             .find(|p| p.key == "Forced")
             .expect("Forced on birth when overlay is active");
         assert_eq!(forced.value, MetricValue::Bool(true));
+    }
+
+    #[test]
+    fn ndata_publishes_logic_overruns_when_the_total_changes() {
+        let mut session = SessionState::new();
+        session.prepare_connect();
+        let birth = session.nbirth(1, OperatingMode::Run, 0, 0, Quality::Good);
+        assert!(birth
+            .metrics
+            .iter()
+            .any(|metric| metric.name.as_deref() == Some(METRIC_OVERRUNS)));
+        assert!(session
+            .ndata(2, OperatingMode::Run, 0, 0, Quality::Good)
+            .is_none());
+        let data = session
+            .ndata(3, OperatingMode::Run, 0, 4, Quality::Good)
+            .expect("overrun change");
+        assert_eq!(data.metrics.len(), 1);
+        assert_eq!(data.metrics[0].name.as_deref(), Some(METRIC_OVERRUNS));
+        assert_eq!(data.metrics[0].value, Some(MetricValue::Long(4)));
     }
 }

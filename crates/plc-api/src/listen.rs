@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
@@ -43,21 +44,27 @@ pub async fn bind_listener(state: &AppState) -> Result<TcpListener, ApiError> {
 pub async fn serve_on(listener: TcpListener, state: AppState) -> Result<(), ApiError> {
     let cfg = state.config.read().expect("config").clone();
     let mode = listen_mode(&cfg)?;
+    let poll_state = state.clone();
+    let poll = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_millis(200));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            poll_state.poll_scan_diagnostics();
+        }
+    });
     let router = crate::router(state);
-    match mode {
-        ListenMode::Http => {
-            axum::serve(
-                listener,
-                router.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        }
-        ListenMode::Https(tls) => {
-            serve_tls(listener, router, tls).await?;
-        }
-    }
-    Ok(())
+    let result = match mode {
+        ListenMode::Http => axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .map_err(|e| ApiError::internal(e.to_string())),
+        ListenMode::Https(tls) => serve_tls(listener, router, tls).await,
+    };
+    poll.abort();
+    result
 }
 
 async fn serve_tls(

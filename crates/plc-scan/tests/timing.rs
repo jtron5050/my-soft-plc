@@ -21,6 +21,10 @@ fn last_and_max_us_track_inject() {
     let t = &engine.status().tasks[0];
     assert_eq!(t.last_us, 1_000);
     assert_eq!(t.max_us, 12_345);
+    assert_eq!(t.samples, 2);
+    assert_eq!(t.avg_us, (12_345 + 1_000) / 2);
+    assert_eq!(t.duration_buckets[plc_scan::duration_bucket(12_345)], 1);
+    assert_eq!(t.duration_buckets[plc_scan::duration_bucket(1_000)], 1);
 }
 
 #[test]

@@ -18,6 +18,7 @@ pub async fn events(
     Query(q): Query<PageQuery>,
 ) -> Result<Json<Vec<DiagEvent>>, ApiError> {
     authed.require(&state, Permission::DiagnosticsRead)?;
+    state.poll_scan_diagnostics();
     let limit = q.limit.unwrap_or(100).min(1000) as usize;
     let cursor = q.cursor.unwrap_or(0);
     let items: Vec<_> = state
@@ -33,7 +34,7 @@ pub async fn events(
 /// Audit row for JSON export.
 #[derive(Debug, Serialize)]
 pub struct AuditRow {
-    /// Index in the ring (oldest = 0).
+    /// Monotonic file sequence.
     pub seq: u64,
     /// Unix seconds.
     pub unix_secs: u64,
@@ -54,19 +55,17 @@ pub async fn audit(
     authed.require(&state, Permission::AuditRead)?;
     let limit = q.limit.unwrap_or(100).min(1000) as usize;
     let cursor = q.cursor.unwrap_or(0);
-    let rows: Vec<AuditRow> = state
+    let rows = state
         .audit
-        .events()
+        .page(cursor, limit)
+        .map_err(|e| ApiError::internal(format!("audit read: {e}")))?
         .into_iter()
-        .enumerate()
-        .filter(|(i, _)| *i as u64 >= cursor)
-        .take(limit)
-        .map(|(i, e)| AuditRow {
-            seq: i as u64,
-            unix_secs: e.unix_secs,
-            principal_id: e.principal_id,
-            action: format!("{:?}", e.action),
-            detail: e.detail,
+        .map(|row| AuditRow {
+            seq: row.seq,
+            unix_secs: row.unix_secs,
+            principal_id: row.principal_id,
+            action: row.action,
+            detail: row.detail,
         })
         .collect();
     Ok(Json(rows))
