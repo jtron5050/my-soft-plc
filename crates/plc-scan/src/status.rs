@@ -1,6 +1,26 @@
-//! Scan status snapshots for REST / diagnostics (PR-12).
+//! Scan status snapshots for REST / diagnostics (PR-12, scan stats in PR-18).
 
 use plc_types::{OperatingMode, ProgramPhase};
+
+/// Upper bounds (microseconds) of the finite scan-duration histogram buckets.
+/// The last stored count is `+Inf` (greater than the last bound).
+pub const DURATION_BUCKET_BOUNDS_US: [u64; 9] = [
+    100, 500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000,
+];
+
+/// Finite bounds plus the `+Inf` bucket.
+pub const DURATION_BUCKETS: usize = DURATION_BUCKET_BOUNDS_US.len() + 1;
+
+/// Index of the histogram bucket that contains `us` (`<=` each bound).
+#[must_use]
+pub fn duration_bucket(us: u64) -> usize {
+    for (i, bound) in DURATION_BUCKET_BOUNDS_US.iter().enumerate() {
+        if us <= *bound {
+            return i;
+        }
+    }
+    DURATION_BUCKET_BOUNDS_US.len()
+}
 
 /// Per-task timing as last observed by the engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,6 +33,14 @@ pub struct TaskTiming {
     pub last_us: u64,
     /// Max invocation duration (microseconds).
     pub max_us: u64,
+    /// Integer mean of invocation durations (`sum_us / samples`, 0 if none).
+    pub avg_us: u64,
+    /// Sum of invocation durations (microseconds).
+    pub sum_us: u64,
+    /// Invocations included in `sum_us` / the histogram.
+    pub samples: u64,
+    /// Raw (not cumulative) histogram counts. Last index is `+Inf`.
+    pub duration_buckets: [u64; DURATION_BUCKETS],
     /// Lifetime overrun count.
     pub overruns: u32,
     /// Consecutive overruns (cleared on an in-time scan).

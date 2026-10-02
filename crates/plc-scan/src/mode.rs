@@ -175,15 +175,16 @@ pub fn apply_request(current: OperatingMode, req: ModeRequest) -> Result<Operati
     }
 }
 
-/// Non-RT handle for mode requests.
+/// Non-RT handle for mode requests and the overrun counter.
 #[derive(Debug, Clone)]
 pub struct ScanHandle {
     cell: ModeCell,
+    overruns: Arc<AtomicU64>,
 }
 
 impl ScanHandle {
-    pub(crate) fn new(cell: ModeCell) -> Self {
-        Self { cell }
+    pub(crate) fn new(cell: ModeCell, overruns: Arc<AtomicU64>) -> Self {
+        Self { cell, overruns }
     }
 
     /// Queue a mode request (observed at the next invocation boundary).
@@ -201,6 +202,12 @@ impl ScanHandle {
     #[must_use]
     pub fn mode_rejected(&self) -> u64 {
         self.cell.rejected()
+    }
+
+    /// Process-wide logic-overrun total (relaxed; written on the scan thread).
+    #[must_use]
+    pub fn logic_overruns(&self) -> u64 {
+        self.overruns.load(Ordering::Relaxed)
     }
 }
 

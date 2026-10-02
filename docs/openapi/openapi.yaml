@@ -270,7 +270,7 @@ paths:
           description: Events
   /api/v1/diagnostics/audit:
     get:
-      summary: Audit export (in-memory; file rotation is PR-18)
+      summary: Audit export (append-only files, rotate at 16 MiB, keep 8)
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
@@ -375,6 +375,7 @@ components:
         period_ms: { type: integer }
         last_us: { type: integer }
         max_us: { type: integer }
+        avg_us: { type: integer }
         overruns: { type: integer }
     IoStatus:
       type: object

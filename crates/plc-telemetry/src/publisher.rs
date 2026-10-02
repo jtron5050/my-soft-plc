@@ -13,15 +13,24 @@ use crate::topics::TopicIds;
 use crate::transport::{Transport, SPARKPLUG_QOS};
 use crate::types::publish_quality;
 
-/// Non-RT source of operator mode for `SYSTEM/Mode`.
+/// Non-RT source of operator mode for `SYSTEM/Mode` and `logic_overruns`.
 pub trait ModeSource: Send + Sync {
     /// Current operator mode.
     fn mode(&self) -> OperatingMode;
+
+    /// Cumulative logic overruns. Default is 0 for test doubles.
+    fn logic_overruns(&self) -> u64 {
+        0
+    }
 }
 
 impl ModeSource for ScanHandle {
     fn mode(&self) -> OperatingMode {
         ScanHandle::mode(self)
+    }
+
+    fn logic_overruns(&self) -> u64 {
+        ScanHandle::logic_overruns(self)
     }
 }
 
@@ -164,10 +173,13 @@ impl<T: Transport, C: WallClock, M: ModeSource> Publisher<T, C, M> {
         let ts = self.clock.unix_ms();
         let synced = self.clock.is_synchronized();
         let q = publish_quality(Quality::Good, synced);
-        if let Some(payload) = self
-            .session
-            .ndata(ts, self.mode.mode(), self.source.drops(), q)
-        {
+        if let Some(payload) = self.session.ndata(
+            ts,
+            self.mode.mode(),
+            self.source.drops(),
+            self.mode.logic_overruns(),
+            q,
+        ) {
             let topic = self.ids.ndata();
             self.send(&topic, &payload)?;
         }
@@ -196,9 +208,13 @@ impl<T: Transport, C: WallClock, M: ModeSource> Publisher<T, C, M> {
     fn publish_nbirth(&mut self) -> Result<(), TelemetryError> {
         let ts = self.clock.unix_ms();
         let q = publish_quality(Quality::Good, self.clock.is_synchronized());
-        let payload = self
-            .session
-            .nbirth(ts, self.mode.mode(), self.source.drops(), q);
+        let payload = self.session.nbirth(
+            ts,
+            self.mode.mode(),
+            self.source.drops(),
+            self.mode.logic_overruns(),
+            q,
+        );
         let topic = self.ids.nbirth();
         self.send(&topic, &payload)
     }

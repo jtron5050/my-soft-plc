@@ -20,6 +20,7 @@ use axum::{BoxError, Router};
 use tower::timeout::TimeoutLayer;
 use tower::ServiceBuilder;
 
+mod audit_log;
 mod auth;
 mod dto;
 mod error;
@@ -31,6 +32,7 @@ mod routes;
 mod state;
 mod tls;
 
+pub use audit_log::{AuditRecord, RotatingAudit, AUDIT_MAX_BYTES, AUDIT_MAX_FILES};
 pub use error::{ApiError, ErrorBody};
 pub use listen::{bind_listener, serve, serve_on};
 pub use program_store::{ProgramStore, StoredMeta};

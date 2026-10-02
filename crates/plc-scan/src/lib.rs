@@ -26,6 +26,8 @@ pub use error::ScanError;
 pub use hooks::EpochHooks;
 pub use mode::{ModeRequest, ScanHandle};
 pub use retain_signal::{RetainDirtyEvent, RetainDirtyWatch};
-pub use status::{ScanStatusSnapshot, TaskTiming};
+pub use status::{
+    duration_bucket, ScanStatusSnapshot, TaskTiming, DURATION_BUCKETS, DURATION_BUCKET_BOUNDS_US,
+};
 pub use telemetry::{TelemetrySample, TelemetrySource};
 pub use watchdog::{HardwareWatchdog, NullWatchdog, RecordingWatchdog};

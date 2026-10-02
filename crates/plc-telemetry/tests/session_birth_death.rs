@@ -11,7 +11,7 @@ fn will_bdseq_matches_nbirth() {
     s.prepare_connect();
     s.set_catalog(TagCatalog::from_image_slots(1, 0).unwrap());
     let death = s.ndeath(50);
-    let birth = s.nbirth(50, OperatingMode::Stop, 0, Quality::Good);
+    let birth = s.nbirth(50, OperatingMode::Stop, 0, 0, Quality::Good);
     let d_bd = death
         .metrics
         .iter()

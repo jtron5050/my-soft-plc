@@ -1,4 +1,4 @@
-//! In-memory diagnostics event ring (architecture 4096; file export is PR-18).
+//! In-memory diagnostics event ring (4096, overwrite oldest). Not spilled to disk.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
